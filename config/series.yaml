@@ -1,0 +1,188 @@
+# Registro delle serie. Unica fonte di verità per download, trasformazioni e ritardi.
+#
+# frequency         M (mensile) o Q (trimestrale); le serie sono salvate in livelli.
+# transform         applicata dopo lo snapshot: none | diff | pct_change | log_diff
+# release_lag_days  giorni tra la fine del periodo di riferimento e la pubblicazione.
+#                   È una stima del ritardo tipico, usata quando manca la data reale.
+# block             gruppo economico (per il DFM e per la dashboard)
+#
+# Codici verificati sulle API l'8 ottobre 2026.
+
+series:
+  - id: gdp
+    name: PIL, volumi concatenati (anno di riferimento 2020), destagionalizzato
+    source: eurostat
+    dataset: namq_10_gdp
+    filters: {geo: IT, unit: CLV20_MEUR, s_adj: SCA, na_item: B1GQ}
+    frequency: Q
+    transform: pct_change
+    release_lag_days: 30  # stima preliminare ISTAT a t+30; FRED la recepisce più tardi
+    block: target
+    role: target
+
+  - id: ip
+    name: Produzione industriale (B-D), destagionalizzata
+    source: eurostat
+    dataset: sts_inpr_m
+    filters: {geo: IT, s_adj: SCA, nace_r2: B-D, unit: I21}
+    frequency: M
+    transform: pct_change
+    release_lag_days: 41
+    block: real
+
+  - id: retail
+    name: Vendite al dettaglio in volume (G47), destagionalizzate
+    source: eurostat
+    dataset: sts_trtu_m
+    filters: {geo: IT, s_adj: SCA, nace_r2: G47, indic_bt: VOL_SLS, unit: I21}
+    frequency: M
+    transform: pct_change
+    release_lag_days: 37
+    block: real
+
+  - id: exports
+    name: Esportazioni totali verso il mondo, valori destagionalizzati
+    source: eurostat
+    dataset: ei_eteu27_2020_m
+    filters: {geo: IT, partner: WORLD, indic: ET-T, stk_flow: EXP, unit: MIO-EUR-SA}
+    frequency: M
+    transform: pct_change
+    release_lag_days: 47
+    block: real
+
+  - id: imports
+    name: Importazioni totali dal mondo, valori destagionalizzati
+    source: eurostat
+    dataset: ei_eteu27_2020_m
+    filters: {geo: IT, partner: WORLD, indic: ET-T, stk_flow: IMP, unit: MIO-EUR-SA}
+    frequency: M
+    transform: pct_change
+    release_lag_days: 47
+    block: real
+
+  - id: unemployment
+    name: Tasso di disoccupazione, destagionalizzato
+    source: eurostat
+    dataset: une_rt_m
+    filters: {geo: IT, s_adj: SA, age: TOTAL, sex: T, unit: PC_ACT}
+    frequency: M
+    transform: diff
+    release_lag_days: 33
+    block: labour
+
+  - id: esi
+    name: Economic Sentiment Indicator (Commissione Europea)
+    source: eurostat
+    dataset: ei_bssi_m_r2
+    filters: {geo: IT, s_adj: SA, indic: BS-ESI-I}
+    frequency: M
+    transform: none
+    release_lag_days: 0  # esce negli ultimi giorni del mese di riferimento
+    block: survey
+
+  - id: conf_industry
+    name: Fiducia dell'industria (saldo)
+    source: eurostat
+    dataset: ei_bssi_m_r2
+    filters: {geo: IT, s_adj: SA, indic: BS-ICI-BAL}
+    frequency: M
+    transform: none
+    release_lag_days: 0
+    block: survey
+
+  - id: conf_services
+    name: Fiducia dei servizi (saldo)
+    source: eurostat
+    dataset: ei_bssi_m_r2
+    filters: {geo: IT, s_adj: SA, indic: BS-SCI-BAL}
+    frequency: M
+    transform: none
+    release_lag_days: 0
+    block: survey
+
+  - id: conf_consumer
+    name: Fiducia dei consumatori (saldo)
+    source: eurostat
+    dataset: ei_bssi_m_r2
+    filters: {geo: IT, s_adj: SA, indic: BS-CSMCI-BAL}
+    frequency: M
+    transform: none
+    release_lag_days: 0
+    block: survey
+
+  - id: hicp
+    name: HICP, indice generale (ECOICOP v2, 2025=100)
+    source: eurostat
+    dataset: prc_hicp_minr
+    filters: {geo: IT, coicop18: TOTAL, unit: I25}
+    frequency: M
+    transform: pct_change
+    release_lag_days: 3  # stima flash
+    block: prices
+
+  - id: yield_it_10y
+    name: Rendimento titoli di Stato a 10 anni, Italia
+    source: eurostat
+    dataset: irt_lt_mcby_m
+    filters: {geo: IT, int_rt: MCBY}
+    frequency: M
+    transform: diff
+    release_lag_days: 14  # ritardo della fonte; sul mercato il dato è noto a fine mese
+    block: financial
+
+  - id: yield_de_10y
+    name: Rendimento titoli di Stato a 10 anni, Germania
+    source: eurostat
+    dataset: irt_lt_mcby_m
+    filters: {geo: DE, int_rt: MCBY}
+    frequency: M
+    transform: diff
+    release_lag_days: 14  # ritardo della fonte; sul mercato il dato è noto a fine mese
+    block: financial
+
+  - id: spread_btp_bund
+    name: Spread BTP-Bund a 10 anni (punti percentuali, medie mensili)
+    source: derived
+    minus: [yield_it_10y, yield_de_10y]
+    frequency: M
+    transform: diff
+    release_lag_days: 14  # ritardo della fonte; sul mercato il dato è noto a fine mese
+    block: financial
+
+  - id: euribor_3m
+    name: Euribor a 3 mesi
+    source: eurostat
+    dataset: irt_st_m
+    filters: {geo: EA, int_rt: IRT_M3}
+    frequency: M
+    transform: diff
+    release_lag_days: 7  # ritardo della fonte
+    block: financial
+
+  - id: ecb_dfr
+    name: Tasso BCE sui depositi (media mensile del dato giornaliero)
+    source: ecb
+    flow: FM
+    key: D.U2.EUR.4F.KR.DFR.LEV
+    frequency: M
+    transform: diff
+    release_lag_days: 1
+    block: financial
+
+  - id: brent
+    name: Brent, media mensile (USD al barile)
+    source: fred
+    fred_id: MCOILBRENTEU
+    frequency: M
+    transform: pct_change
+    release_lag_days: 10  # mediana ALFRED; dal 2011 si usa la data reale
+    block: energy
+
+  - id: gas_eu
+    name: Gas naturale, prezzo europeo (USD per MMBtu, fonte FMI)
+    source: fred
+    fred_id: PNGASEUUSDM
+    frequency: M
+    transform: pct_change
+    release_lag_days: 50  # prudente: mediana ALFRED 15 giorni, ma un quarto dei dati oltre 55; dal 2015 data reale
+    block: energy
