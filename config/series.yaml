@@ -44,10 +44,11 @@ series:
     filters: {geo: IT, s_adj: SCA, nace_r2: G47, indic_bt: VOL_SLS, unit: I21}
     frequency: M
     transform: pct_change
-    release_lag_days: 38  # 38 giorni dalla base 2015 (marzo 2018)
+    # Dal 2017 il calendario oscilla tra 33 e 44 giorni (gennaio 2024 uscito il 15 marzo):
+    # il ritardo copre il caso peggiore riscontrato, a costo di datare tardi gli altri mesi.
+    release_lag_days: 44
     release_lag_history:
       - {until: 2016-12-31, days: 56}  # 55 giorni (es. luglio 2011 il 23 settembre)
-      - {until: 2017-12-31, days: 43}  # 40 giorni dal dato di gennaio 2017 (uscito il 15 marzo)
     block: real
 
   - id: exports
@@ -131,7 +132,7 @@ series:
     filters: {geo: IT, coicop18: TOTAL, unit: I25}
     frequency: M
     transform: pct_change
-    release_lag_days: 3  # stima flash
+    release_lag_days: 7  # stima flash; quella di gennaio esce fino al 5 febbraio
     block: prices
 
   - id: yield_it_10y

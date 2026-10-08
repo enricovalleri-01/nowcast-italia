@@ -41,23 +41,38 @@ La data di rilascio ha quattro origini:
 | Origine | Significato | Copertura |
 |---|---|---|
 | `alfred` | prima pubblicazione dallo storico dei vintage ALFRED | Brent dal 2011, gas dal 2015 |
-| `first_seen` | il dato è comparso tra due download: vale la data del download | da ottobre 2026 in avanti |
+| `first_seen` | il periodo è comparso a un download: vale la data del download | da ottobre 2026 in avanti |
 | `revision` | il valore di un periodo già noto è cambiato: nuova riga con la data del download | da ottobre 2026 in avanti |
 | `estimated_lag` | fine del periodo più il ritardo di pubblicazione in vigore allora | il resto dello storico (circa il 96% delle righe) |
 
-Un valore registrato non viene mai riscritto: una revisione aggiunge una riga, quindi lo snapshot di una data passata resta identico dopo ogni aggiornamento. Ogni esecuzione stampa l'impronta del dataset usato, così una valutazione è legata a una versione precisa dei dati.
+#### Un archivio che cresce solo per aggiunta
 
-I ritardi stimati seguono il calendario ISTAT dell'epoca e sono arrotondati per eccesso, perché una data troppo anticipata darebbe al modello informazione che non aveva. Dove il calendario è cambiato il registro distingue i regimi:
+Ogni riga è una versione di un'osservazione, con la data di acquisizione e un numero progressivo. Lo snapshot prende, per ogni periodo, l'ultima versione pubblicata entro la data richiesta; a parità di data prevale la più recente, quindi il risultato non dipende dall'ordine delle righe. Tre comandi distinti modificano l'archivio:
 
-| Serie | Ritardo | Riscontro |
+| Comando | Cosa fa | Effetto sugli snapshot passati |
+|---|---|---|
+| `update-data` | aggiunge nuovi periodi e revisioni, datati al giorno del download | nessuno: le righe esistenti non vengono toccate |
+| `init-data` | importa lo storico di una serie non ancora in archivio, con date stimate | li cambia: nuova versione del dataset |
+| `redate-data` | riapplica il calendario di `series.yaml` alle date stimate | li cambia: nuova versione del dataset |
+
+Solo l'aggiornamento ordinario garantisce l'invarianza del passato. Un periodo che compare per la prima volta a un aggiornamento prende la data di quel giorno anche se è più vecchio dei dati già presenti: non c'è prova che fosse pubblico prima. Ogni salvataggio conserva una copia immutabile in `data/versions/`, nominata con l'impronta di schema e contenuto; una valutazione legge la copia della propria versione e ne verifica l'impronta.
+
+#### Calendario
+
+I ritardi stimati seguono il calendario ISTAT dell'epoca. La regola è che la data stimata non deve mai precedere quella reale, perché darebbe al modello informazione che non aveva; può seguirla di qualche giorno.
+
+| Serie | Ritardo | Riscontri |
 |---|---|---|
 | PIL, stima preliminare | 46 giorni fino al 2017-Q4, poi 32 | 2011-Q4 uscito il 15 febbraio 2012; 2018-Q1 il 2 maggio 2018 |
-| Vendite al dettaglio | 56 giorni fino al 2016, 43 nel 2017, poi 38 | luglio 2011 uscito il 23 settembre; gennaio 2017 il 15 marzo |
+| Vendite al dettaglio | 56 giorni fino al 2016, poi 44 | luglio 2011 il 23 settembre; gennaio 2018 il 14 marzo; gennaio 2024 il 15 marzo |
 | Produzione industriale | 43 giorni | luglio 2011 uscito il 12 settembre |
 | Commercio estero | 50 giorni | novembre 2011 uscito il 18 gennaio 2012 |
 | Disoccupazione | 33 giorni | dicembre 2011 uscito il 31 gennaio 2012 |
+| HICP, stima flash | 7 giorni | gennaio 2019 uscito il 4 febbraio |
 
-Queste date reali sono verificate da un test: il ritardo stimato non deve precederle e non deve superarle di più di cinque giorni. Per rendimenti ed Euribor il ritardo è quello della fonte, non quello del mercato: il backtest vede gli stessi dati che vede il sistema dal vivo.
+Per le vendite al dettaglio un ritardo fisso è una forzatura: dal 2017 i comunicati di gennaio sono usciti tra 33 e 44 giorni dopo la fine del mese. Il valore scelto copre il caso peggiore riscontrato, quindi in molti mesi il dato entra nel set informativo fino a 11 giorni dopo la pubblicazione reale. È un errore in direzione prudente, che penalizza soprattutto il bridge.
+
+Ventuno date reali sono verificate da un test: il ritardo stimato non deve precederle e non deve superarle di più di 12 giorni. Per rendimenti ed Euribor il ritardo è quello della fonte, non quello del mercato: il backtest vede gli stessi dati che vede il sistema dal vivo.
 
 ### Modelli
 
@@ -80,8 +95,8 @@ Specificazione del DFM:
 
 - **Fiducie in differenze prime**. In livelli sono quasi a radice unitaria e finiscono per coincidere con il fattore: sui campioni che terminano nel 2008-2009 la stima diventa esplosiva (coefficiente autoregressivo sopra 1).
 - **ESI e rendimento italiano esclusi**: sono combinazioni di serie già presenti (le fiducie settoriali; Bund più spread).
-- **Stime rifiutate invece che usate**: se l'algoritmo EM non converge o il modello non è stazionario, il codice si ferma con un errore.
-- **Parametri mai dal futuro**: una stima porta con sé la data del set informativo che l'ha prodotta e non può essere applicata a una data precedente.
+- **Stime rifiutate invece che usate**: il codice si ferma con un errore se il criterio di convergenza dell'EM non è raggiunto (per iterazioni esaurite o per un calo della verosimiglianza) o se il modello non è stazionario.
+- **Parametri mai dal futuro né da un altro modello**: una stima porta con sé la data del set informativo e la specificazione che l'hanno prodotta (fattori, ordine, trasformazioni, finestra esclusa) e non può essere applicata a una data precedente o a una specificazione diversa.
 
 #### Finestra di sviluppo (dati fino al 2011)
 
@@ -107,7 +122,7 @@ Versione 1, fissata con il tag git `protocollo-v1` prima di eseguire il backtest
 
 - **Variabile**: crescita t/t del PIL italiano in volume, destagionalizzato e corretto per il calendario.
 - **Valore realizzato**: quello presente nel dataset congelato, cioè l'ultima versione disponibile e non la prima stima pubblicata.
-- **Dataset**: quello scaricato l'8 ottobre 2026, impronta `56a8dddb28d8`. Il backtest non aggiorna i dati.
+- **Dataset**: quello scaricato l'8 ottobre 2026, impronta `ef2b22705503` (vedi le modifiche successive). Il backtest legge la copia congelata in `data/versions/` e non aggiorna i dati.
 
 ### Modelli
 
@@ -156,7 +171,18 @@ Una riga per modello, trimestre e orizzonte con: previsione e deviazione standar
 
 ### Modifiche successive al protocollo
 
-Nessuna.
+**8 ottobre 2026, dopo il tag `protocollo-v1` e prima di eseguire il backtest.** Nessun risultato del backtest esisteva quando sono state decise: nascono dalla seconda review del codice.
+
+| Modifica | Motivo | Effetto |
+|---|---|---|
+| Vendite al dettaglio: ritardo di 44 giorni dal 2017 (prima 43 nel 2017 e 38 dal 2018) | il regime a 38 giorni anticipava di quattro giorni i comunicati di gennaio e febbraio 2018 | 115 date di rilascio spostate in avanti |
+| HICP: ritardo di 7 giorni (prima 3) | la stima flash di gennaio 2019 uscì il 4 febbraio | 369 date di rilascio spostate in avanti |
+| Dataset: impronta `ef2b22705503` (prima `56a8dddb28d8`) | conseguenza delle due righe sopra e del nuovo schema dell'archivio | stessi 7.109 periodi e stessi valori; cambiano solo quelle 484 date |
+| Controllo di convergenza dell'EM basato sul criterio effettivo, non sul numero di iterazioni | il controllo precedente poteva rifiutare stime convergenti e accettarne di non convergenti | cambia la classificazione dei fallimenti, non i modelli |
+
+Il commit con queste modifiche è marcato dal tag `protocollo-v1.1`, che è la versione eseguita dal backtest; `protocollo-v1` resta sul commit originale.
+
+Non cambiano i modelli, gli orizzonti, le metriche, le finestre né i test. Gli errori sulla finestra di sviluppo, ricalcolati sul nuovo dataset, sono identici a quelli riportati sopra; la scelta di un fattore non è stata rimessa in discussione.
 
 ## Risultati
 
@@ -165,10 +191,10 @@ Da fare: il backtest non è ancora stato eseguito.
 ## Limiti
 
 - **Pseudo real-time, non real-time.** Per lo storico precedente al primo download (8 ottobre 2026) i valori sono quelli già rivisti disponibili quel giorno: il backtest rispetta il calendario delle pubblicazioni ma non le revisioni. Parametri e standardizzazione usano quindi valori che allora non esistevano, e il verso della distorsione sull'accuratezza non è garantito. Da ottobre 2026 in poi le revisioni sono registrate.
-- **Date di rilascio in gran parte stimate.** Circa il 96% delle righe ha una data ricavata dal ritardo tipico. I ritardi sono riscontrati su alcune date reali, non su tutto il calendario: gli orizzonti del backtest hanno una tolleranza di qualche giorno.
+- **Date di rilascio in gran parte stimate.** Circa il 96% delle righe ha una data ricavata da un ritardo fisso, riscontrato su 21 date reali e non sull'intero calendario. Un ritardo fisso non può seguire un calendario che oscilla: dove è stato trovato un anticipo è stato allargato, ma altri anticipi di qualche giorno restano possibili, e per le vendite al dettaglio il dato entra fino a 11 giorni tardi.
 - **Date nazionali, fonte europea.** I riscontri riguardano i comunicati ISTAT, mentre i dati arrivano da Eurostat, che può pubblicarli più tardi.
 - **Fiducia dei consumatori.** L'8 ottobre 2026 il dato di settembre non era disponibile, a differenza delle altre inchieste: il ritardo zero potrebbe essere ottimistico e va verificato sul calendario della fonte.
-- **HICP.** Il ritardo di tre giorni corrisponde alla stima flash; il valore usato è quello successivo, rivisto.
+- **HICP.** Il ritardo di sette giorni corrisponde alla stima flash; il valore usato è quello successivo, rivisto.
 - **Edizioni storiche del PIL non integrate.** ISTAT pubblica le edizioni dei conti trimestrali dal 2014, con cui si potrebbe valutare contro la prima stima invece che contro il dato di oggi.
 - **Finestra di sviluppo non indipendente.** I 16 trimestri 2008-2011 sono serviti a scegliere la specificazione e includono la crisi del 2008-2009.
 - **Intervalli dei modelli.** La deviazione standard del bridge e degli AR considera solo l'errore della regressione, non l'incertezza sui mesi completati né quella dei parametri. Gli intervalli della dashboard si baseranno sugli errori del backtest.
@@ -182,7 +208,8 @@ conda create -n nowcast python=3.12
 conda activate nowcast
 pip install -e ".[dev]"
 cp .env.example .env        # poi inserire la chiave FRED (gratuita)
-python -m nowcast.pipeline update-data      # scarica e aggiorna i dati
+python -m nowcast.pipeline init-data        # prima volta: importa lo storico
+python -m nowcast.pipeline update-data      # aggiornamenti successivi
 python -m nowcast.pipeline nowcast          # stima del trimestre in corso
 python -m nowcast.pipeline select-factors   # evidenze sulla scelta dei fattori
 pytest

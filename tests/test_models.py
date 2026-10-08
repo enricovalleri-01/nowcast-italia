@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
 import pytest
+from statsmodels.tsa.statespace.dynamic_factor_mq import DynamicFactorMQ
 
 from nowcast.config import SeriesSpec
-from nowcast.data.vintages import assign_release_dates
+from nowcast.data.vintages import import_history
 from nowcast.models.ar import _design, fit_ar, forecast_ar, select_order
 from nowcast.models.base import (
     COVID_WINDOW,
@@ -15,7 +16,7 @@ from nowcast.models.base import (
 )
 from nowcast.models.benchmark import ARBenchmark, HistoricalMean
 from nowcast.models.bridge import Bridge, complete_months, quarterly_regressor, rebuild_levels
-from nowcast.models.dfm import DFM, bai_ng_ic, max_root, monthly_endog
+from nowcast.models.dfm import DFM, bai_ng_ic, em_convergence, max_root, monthly_endog
 from nowcast.transforms import apply_transform, monthly_to_quarterly
 
 
@@ -105,9 +106,7 @@ def test_build_info_hides_gdp_not_yet_published() -> None:
     months = pd.Series(
         np.linspace(100, 105, 60), index=pd.date_range("2021-09-30", periods=60, freq="ME")
     )
-    obs = pd.concat(
-        [assign_release_dates(quarters, gdp, today), assign_release_dates(months, ip, today)]
-    )
+    obs = pd.concat([import_history(quarters, gdp, today), import_history(months, ip, today)])
     before = build_info(obs, [gdp, ip], pd.Timestamp("2026-07-29"))
     after = build_info(obs, [gdp, ip], pd.Timestamp("2026-07-30"))
     assert before.gdp_growth.index[-1] == pd.Timestamp("2026-03-31")
@@ -265,7 +264,47 @@ def test_dfm_accepts_parameters_estimated_in_the_past() -> None:
     assert np.isfinite(result.mean)
 
 
-def test_dfm_rejects_an_estimate_that_did_not_converge() -> None:
+def test_dfm_rejects_an_estimate_from_a_different_specification() -> None:
+    info = covid_info()
+    target = pd.Timestamp("2022-03-31")
+    ex_post = DFM(1, exclude=COVID_WINDOW).estimate(info, target)
+    with pytest.raises(ValueError, match="specificazione diversa"):
+        DFM(1).nowcast(info, target, ex_post)
+    other_transforms = {**info.dfm_transforms, "x0": "diff"}
+    with pytest.raises(ValueError, match="specificazione diversa"):
+        DFM(1, exclude=COVID_WINDOW, transforms=other_transforms).nowcast(info, target, ex_post)
+    with pytest.raises(ValueError, match="specificazione diversa"):
+        DFM(2, exclude=COVID_WINDOW).nowcast(info, target, ex_post)
+
+
+def test_dfm_rejects_an_estimate_that_exhausted_its_iterations() -> None:
     info = synthetic_info()
-    with pytest.warns(Warning), pytest.raises(ValueError, match="non convergente"):
-        DFM(factors=1, maxiter=1).estimate(info, pd.Timestamp("2019-12-31"))
+    with pytest.warns(Warning), pytest.raises(ValueError, match="iterazioni esaurite"):
+        DFM(factors=1, maxiter=3).estimate(info, pd.Timestamp("2019-12-31"))
+
+
+def test_dfm_accepts_convergence_reached_on_the_last_allowed_iteration() -> None:
+    info, target = synthetic_info(), pd.Timestamp("2019-12-31")
+    needed = int(DFM(factors=1).estimate(info, target).results.mle_retvals["iter"])
+    exact = DFM(factors=1, maxiter=needed).estimate(info, target)
+    assert em_convergence(exact.results)[0]
+
+
+def test_dfm_rejects_an_estimate_stopped_by_a_likelihood_decrease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alla seconda iterazione la verosimiglianza cala: statsmodels torna alla prima e si ferma."""
+    original = DynamicFactorMQ._em_iteration
+    calls = {"n": 0}
+
+    class Worse:
+        llf_obs = np.array([-1e12])
+
+    def failing(self: DynamicFactorMQ, *args: object, **kwargs: object) -> tuple[object, ...]:
+        calls["n"] += 1
+        out = original(self, *args, **kwargs)
+        return (Worse(), *out[1:]) if calls["n"] == 2 else out
+
+    monkeypatch.setattr(DynamicFactorMQ, "_em_iteration", failing)
+    with pytest.warns(Warning), pytest.raises(ValueError, match="calo della verosimiglianza"):
+        DFM(factors=1).estimate(synthetic_info(), pd.Timestamp("2019-12-31"))
