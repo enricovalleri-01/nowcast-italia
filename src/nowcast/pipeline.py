@@ -3,6 +3,8 @@
 init-data       importa lo storico delle serie non ancora in archivio (nuova versione)
 update-data     aggiornamento ordinario: solo righe aggiunte
 redate-data     riapplica il calendario di series.yaml (nuova versione)
+backtest        backtest del protocollo sulla versione congelata del dataset
+evaluate        tabelle dei risultati del backtest
 nowcast         stima del trimestre in corso
 select-factors  evidenze sulla finestra di sviluppo
 """
@@ -20,6 +22,8 @@ from nowcast.config import ROOT, SeriesSpec, load_series
 from nowcast.data import cache
 from nowcast.data.sources import ecb, eurostat, fred
 from nowcast.data.vintages import import_history, redate, update
+from nowcast.evaluation import backtest
+from nowcast.evaluation.report import build_report
 from nowcast.models import selection
 from nowcast.models.base import Model, Nowcast, build_info, next_unpublished_quarter
 from nowcast.models.benchmark import ARBenchmark, HistoricalMean
@@ -149,6 +153,47 @@ def run_factor_selection() -> None:
     )
 
 
+RESULTS_DIR = ROOT / "results"
+BACKTEST_PATH = RESULTS_DIR / "backtest.csv"
+REPORT_PATH = RESULTS_DIR / "report.md"
+DATE_COLUMNS = ["target", "as_of", "publication_date"]
+
+
+def run_backtest(workers: int = 6) -> pd.DataFrame:
+    """Backtest del protocollo sulla versione congelata del dataset."""
+    version = backtest.DATASET_VERSION
+    observations = cache.load_version(version)  # verifica anche l'impronta
+    commit = backtest.specification_commit()
+    log.info("backtest su dataset %s, specificazione %s", version, commit)
+    results = backtest.run_backtest(
+        observations,
+        load_series(),
+        backtest.protocol_models(),
+        backtest.protocol_quarters(),
+        version,
+        commit,
+        workers=workers,
+    )
+    RESULTS_DIR.mkdir(exist_ok=True)
+    results.to_csv(BACKTEST_PATH, index=False, float_format="%.10g")
+    failed = int((results["status"] != backtest.OK).sum())
+    log.info("%d previsioni, %d mancanti -> %s", len(results), failed, BACKTEST_PATH)
+    return results
+
+
+def load_backtest() -> pd.DataFrame:
+    return pd.read_csv(BACKTEST_PATH, parse_dates=DATE_COLUMNS, keep_default_na=False,
+                       na_values={"forecast": [""], "std": [""], "actual": [""]})  # fmt: skip
+
+
+def run_evaluation() -> str:
+    """Scrive il rapporto con tutte le tabelle del protocollo."""
+    report = build_report(load_backtest())
+    REPORT_PATH.write_text(report, encoding="utf-8")
+    log.info("rapporto scritto in %s", REPORT_PATH)
+    return report
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -157,6 +202,8 @@ def main() -> None:
         "init-data": init_data,
         "update-data": update_data,
         "redate-data": redate_data,
+        "backtest": run_backtest,
+        "evaluate": run_evaluation,
         "nowcast": run_nowcast,
         "select-factors": run_factor_selection,
     }

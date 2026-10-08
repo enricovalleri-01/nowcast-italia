@@ -2,7 +2,7 @@
 
 Stima in tempo reale della crescita trimestrale del PIL dell'Italia a partire da indicatori mensili, con valutazione pseudo real-time dei modelli.
 
-**Stato del progetto**: dati e modelli completati (Fasi 1 e 2), protocollo di valutazione fissato. Backtest e dashboard sono in arrivo; i risultati sono segnati come da fare.
+**Stato del progetto**: dati, modelli e valutazione completati (Fasi 1-3). La dashboard è in arrivo.
 
 ## Domanda di ricerca
 
@@ -186,7 +186,99 @@ Non cambiano i modelli, gli orizzonti, le metriche, le finestre né i test. Gli 
 
 ## Risultati
 
-Da fare: il backtest non è ancora stato eseguito.
+Backtest eseguito l'8 ottobre 2026 secondo il protocollo v1.1: dataset `ef2b22705503`, specificazione al commit `0a09f41`, 58 trimestri, 2.088 previsioni. Tutte le tabelle, comprese quelle non riportate qui, sono in [results/report.md](results/report.md); le singole previsioni, con data dell'orizzonte e impronta del dataset, in [results/backtest.csv](results/backtest.csv). Errori in punti percentuali di crescita t/t.
+
+**In sintesi: nei periodi ordinari nessun modello batte l'AR(1) in modo statisticamente distinguibile, e il DFM fa peggio.** Nessuno dei 12 confronti confermativi mostra un modello significativamente migliore del benchmark; uno mostra il DFM significativamente peggiore.
+
+### Senza il 2020-2021 (50 trimestri)
+
+| Modello | RMSE a 90 giorni | a 60 giorni | a 30 giorni | Relativo ad AR(1) a 90 / 60 / 30 | p-value DM a 90 / 60 / 30 |
+|---|---|---|---|---|---|
+| `media_storica` | 0,451 | 0,451 | 0,451 | 1,18 / 1,16 / 1,16 | 0,26 / 0,17 / 0,17 |
+| `ar1` | 0,382 | 0,390 | 0,390 | — | — |
+| `ar2` | 0,407 | 0,414 | 0,414 | 1,06 / 1,06 / 1,06 | 0,33 / 0,16 / 0,16 |
+| `bridge` | 0,345 | 0,376 | 0,484 | 0,90 / 0,96 / 1,24 | 0,59 / 0,79 / 0,51 |
+| `dfm_k1` | 0,688 | 0,513 | 0,491 | 1,80 / 1,32 / 1,26 | 0,16 / **0,045** / 0,30 |
+| `dfm_k2` | 0,843 | 0,710 | 0,671 | 2,20 / 1,82 / 1,72 | 0,10 / 0,10 / 0,12 |
+
+- Il bridge è leggermente migliore dell'AR(1) a 90 e 60 giorni e peggiore a 30; nessuna differenza è significativa.
+- Il DFM principale è peggiore dell'AR(1) a tutti gli orizzonti, in modo significativo a 60 giorni. Con la perdita assoluta lo è a 90 e a 60 giorni (p = 0,04 e 0,02).
+- Il DFM a due fattori, preferito dagli errori sulla finestra di sviluppo, qui fa peggio di quello a un fattore.
+
+### Finestra completa (58 trimestri)
+
+**Attenzione:** la colonna a 90 giorni usa 57 trimestri, senza il 2020-Q3, e non è confrontabile con le colonne a 60 e 30 giorni, che ne usano 58.
+
+| Modello | RMSE a 90 giorni | a 60 giorni | a 30 giorni | p-value DM a 90 / 60 / 30 |
+|---|---|---|---|---|
+| `media_storica` | 1,953 | 2,697 | 2,697 | 0,38 / 0,35 / 0,35 |
+| `ar1` | 1,737 | 4,565 | 4,565 | — |
+| `ar2` | 2,067 | 4,678 | 4,678 | 0,27 / 0,24 / 0,24 |
+| `bridge` | 3,048 | 4,030 | 2,085 | 0,32 / 0,51 / 0,30 |
+| `dfm_k1` | 1,610 | 2,132 | 2,057 | 0,45 / 0,27 / 0,26 |
+| `dfm_k2` | 1,728 | 1,149 | 0,980 | 0,96 / 0,28 / 0,27 |
+
+Qui gli RMSE sono determinati da pochi trimestri del 2020. A 60 e 30 giorni il DFM a due fattori ha un errore pari a un quarto di quello dell'AR(1), ma la differenza viene da due o tre osservazioni e il test non la distingue dal caso. Il trimestre manca a 90 giorni perché lì una previsione del DFM è stata rifiutata (vedi sotto); su 58 trimestri l'AR(1) a 90 giorni ha RMSE 4,565, come agli altri orizzonti.
+
+### Dove i modelli falliscono
+
+| Modello | 2012-2019 (30 giorni) | 2020-2021 (30 giorni) | 2022-2026 (30 giorni) |
+|---|---|---|---|
+| `ar1` | 0,353 | 12,253 | 0,447 |
+| `bridge` | 0,362 | 5,482 | 0,646 |
+| `dfm_k1` | 0,361 | 5,401 | 0,661 |
+| `dfm_k2` | 0,368 | 2,035 | 1,006 |
+
+- **Prima del 2020 gli indicatori non aggiungono nulla.** Tra il 2012 e il 2019 tutti i modelli hanno RMSE tra 0,34 e 0,40 e l'AR(1) è il migliore o alla pari. La crescita italiana di quegli anni era bassa e regolare: c'era poco da prevedere oltre la persistenza.
+- **Nel 2020 tutti sbagliano di molti punti.** Il primo trimestre (−5,4%) non è stato colto da nessun modello a nessun orizzonte: errori tra 5,1 e 5,6 punti, perché il crollo si concentrò a marzo e i dati arrivarono dopo. Per il secondo trimestre (−12,6%) il DFM a due fattori arriva a 0,7 punti dal dato a 30 giorni, il bridge sbaglia di 7.
+- **Dopo il 2020 i modelli stimati restano danneggiati.** L'AR(1) stimato con il 2020 nel campione prevede −18% per il terzo trimestre 2020 (errore di 32 punti). Il bridge prevede −17,6% per il quarto trimestre 2020 a 90 giorni. Tra il 2022 e il 2026 il DFM ha un RMSE quasi doppio rispetto al 2012-2019.
+- **Il bridge peggiora avvicinandosi alla pubblicazione** fuori dal 2020-2021 (0,345 a 90 giorni, 0,484 a 30). Pesa soprattutto il primo trimestre 2022: a 30 giorni, con i dati di gennaio e febbraio, sbaglia di 2,5 punti contro 0,5 a 90 giorni.
+- **Una previsione mancante su 2.088**: `dfm_k1` per il 2020-Q3 a 90 giorni, stima rifiutata perché non stazionaria (radice 1,062). Non è stata sostituita.
+
+I dieci trimestri con gli errori più grandi, per ogni orizzonte, sono tutti tra il 2020-Q1 e il 2022-Q3, con l'unica eccezione del 2012-Q1 a 90 giorni; l'elenco completo è nel rapporto.
+
+### Quanto pesa il trattamento del Covid (analisi secondaria)
+
+Le varianti `_expost` escludono marzo-settembre 2020 dalla stima: usano un'informazione che allora non c'era, quindi non valgono come risultato principale.
+
+| Modello | Principale, senza 2020-2021, a 30 giorni | Ex post | Principale, 2022-2026 | Ex post |
+|---|---|---|---|---|
+| `ar1` | 0,390 | 0,397 | 0,447 | 0,466 |
+| `bridge` | 0,484 | 0,395 | 0,646 | 0,448 |
+| `dfm_k1` | 0,491 | 0,368 | 0,661 | 0,381 |
+| `dfm_k2` | 0,671 | 0,368 | 1,006 | 0,368 |
+
+Con il 2020 fuori dalla stima il DFM passa da peggiore a migliore dell'AR(1) a 30 giorni (RMSE relativo 0,93), ma la differenza non è significativa (p = 0,34). Il cattivo risultato del DFM principale dipende quindi in buona parte da come si tratta il 2020, non dalla struttura del modello. Resta però un'indicazione, non una prova: è un confronto esplorativo e fatto col senno di poi.
+
+### Osservazioni annotate, non applicate
+
+Durante il backtest sono emersi tre punti che potrebbero suggerire modifiche. Come da protocollo non ne è stata applicata nessuna.
+
+- **Trattamento del 2020 nei modelli principali.** I risultati indicano che una regola per gli outlier, definita senza guardare al futuro, migliorerebbe molto DFM e bridge dopo il 2020. Sceglierla ora significherebbe sceglierla sui risultati.
+- **Test non calcolabile in un caso.** Per `dfm_k2_expost` a 90 giorni la varianza di lungo periodo stimata con il nucleo rettangolare è negativa e il test di Diebold-Mariano non è definito. Un nucleo di Bartlett lo eviterebbe.
+- **Campione comune a 90 giorni.** La regola del protocollo (solo i trimestri in cui tutti i modelli hanno una previsione) toglie il 2020-Q3 da quella colonna per un solo modello mancante, rendendola poco confrontabile con le altre.
+
+## Conclusioni
+
+**Cosa mostra il backtest**
+
+- Nei periodi ordinari nessun modello batte l'AR(1). Senza il 2020-2021 il bridge gli è vicino (RMSE relativo tra 0,90 e 1,24, mai significativo) e gli indicatori mensili non riducono l'errore in modo distinguibile dal caso.
+- Il DFM principale è peggiore dell'AR(1): RMSE relativo tra 1,26 e 1,80, con una differenza significativa a 60 giorni.
+- Il 2020 domina la finestra completa. Lì le classifiche dipendono da due o tre trimestri e nessun test distingue i modelli.
+
+**Cosa non mostra**
+
+- Non mostra che il DFM sia inutile. Stimato senza marzo-settembre 2020 ha errori inferiori all'AR(1) a 30 giorni, ma quel confronto è esplorativo, usa un'informazione che nel 2020 non esisteva e non è significativo. Dice dove guardare, non cosa concludere.
+- Non mostra che gli indicatori mensili non contengano informazione sul PIL. Mostra che questi modelli, con questa specificazione fissata in anticipo, non l'hanno trasformata in previsioni migliori su 50 trimestri di crescita bassa e regolare.
+- Non dice quale modello sarebbe stato migliore in tempo reale: vedi i limiti qui sotto.
+
+**I limiti che pesano di più**
+
+- **Pseudo real-time.** I valori usati sono quelli rivisti di oggi, non quelli disponibili allora. Tutti i modelli, AR(1) compreso, hanno visto dati più puliti di quelli reali.
+- **Date di rilascio stimate per il 96% delle righe.** Gli orizzonti a 90, 60 e 30 giorni hanno una tolleranza di alcuni giorni, e per le vendite al dettaglio fino a 11.
+- **Valutazione contro il dato rivisto.** L'errore è misurato sull'ultima versione del PIL, non sulla prima stima, che è ciò che un nowcast cerca di anticipare.
+
+Il risultato utile di questo progetto non è un modello che vince, ma un banco di prova che non lo lascia vincere per errore: set informativi ricostruiti per data, specificazione fissata prima dei risultati, e un benchmark semplice che si è rivelato difficile da battere.
 
 ## Limiti
 
@@ -212,6 +304,8 @@ python -m nowcast.pipeline init-data        # prima volta: importa lo storico
 python -m nowcast.pipeline update-data      # aggiornamenti successivi
 python -m nowcast.pipeline nowcast          # stima del trimestre in corso
 python -m nowcast.pipeline select-factors   # evidenze sulla scelta dei fattori
+python -m nowcast.pipeline backtest         # backtest del protocollo (circa 5 minuti)
+python -m nowcast.pipeline evaluate         # tabelle dei risultati
 pytest
 ```
 
