@@ -2,7 +2,7 @@
 
 Stima in tempo reale della crescita trimestrale del PIL dell'Italia a partire da indicatori mensili, con valutazione pseudo real-time dei modelli.
 
-**Stato del progetto**: dati completati (Fase 1). Modelli, valutazione e dashboard sono in arrivo; le sezioni corrispondenti sono segnate come da fare.
+**Stato del progetto**: dati e modelli completati (Fasi 1 e 2). Valutazione e dashboard sono in arrivo; le sezioni corrispondenti sono segnate come da fare.
 
 ## Domanda di ricerca
 
@@ -48,7 +48,37 @@ I ritardi tipici sono stati controllati contro la disponibilità effettiva dei d
 
 ### Modelli
 
-Da fare (Fase 2): benchmark autoregressivi, bridge equations, dynamic factor model a frequenza mista.
+Tutti i modelli ricevono lo stesso set informativo e restituiscono la crescita t/t prevista con una deviazione standard.
+
+| Modello | Cosa usa | Come funziona |
+|---|---|---|
+| Media storica | solo il PIL | media della crescita passata |
+| AR(1), AR(2) | solo il PIL | autoregressione OLS; se manca anche il trimestre precedente prevede due passi avanti |
+| Bridge | produzione industriale, vendite al dettaglio, ESI | completa i mesi mancanti di ogni indicatore con un AR (ordine scelto con il BIC), porta i livelli a media trimestrale e stima una regressione OLS sul PIL |
+| DFM | 15 serie mensili più il PIL | fattore comune mensile stimato con l'algoritmo EM (`DynamicFactorMQ` di statsmodels); il PIL trimestrale entra con l'aggregazione di Mariano e Murasawa e i dati mancanti sono gestiti dal filtro di Kalman |
+
+Scelte comuni:
+
+- **Indicatori del bridge fissati a priori**, non selezionati sul periodo di valutazione: due indicatori quantitativi e la fiducia sintetica.
+- **Covid escluso dalla stima, non dalle previsioni**: le osservazioni tra marzo e settembre 2020 non entrano nella stima dei parametri, ma restano nei dati su cui si calcola il nowcast. Con il 2020 dentro, la deviazione standard del PIL passa da 0,73 a 2,06 e ogni parametro ne viene dominato.
+
+Specificazione del DFM:
+
+- **Fiducie in differenze prime**. In livelli sono quasi a radice unitaria e finiscono per coincidere con il fattore: sui campioni che terminano nel 2008-2009 la stima diventa esplosiva (coefficiente autoregressivo sopra 1) e l'errore di validazione supera le migliaia di punti. In differenze il modello resta stazionario su tutta la finestra.
+- **ESI e rendimento italiano esclusi**: sono combinazioni di serie già presenti (le fiducie settoriali; Bund più spread).
+- **Controllo di stazionarietà**: una stima con radice maggiore o uguale a 1 viene rifiutata con un errore, invece di produrre un numero.
+
+Numero di fattori. La scelta usa solo dati fino al 2011, prima dell'inizio del backtest, e si riproduce con `python -m nowcast.pipeline select-factors`.
+
+| Fattori | Varianza spiegata | ICp2 (Bai-Ng) | BIC del modello | RMSE a 90 giorni | a 60 giorni | a 30 giorni |
+|---|---|---|---|---|---|---|
+| 1 | 22% | **−0,053** | **5.668** | **0,855** | 0,856 | 0,783 |
+| 2 | 34% | −0,020 | 5.689 | 0,867 | **0,768** | **0,748** |
+| 3 | 44% | 0,030 | 5.715 | 0,921 | 0,935 | 0,878 |
+
+L'RMSE è l'errore pseudo fuori campione sui 16 trimestri 2008-2011, a 90, 60 e 30 giorni dalla pubblicazione del PIL. Sulla stessa finestra l'AR(1) ha RMSE 0,958 e il bridge 1,035, 0,965 e 0,758.
+
+Il modello principale ha **un fattore con dinamica VAR(1)**: lo indicano entrambi i criteri di informazione, mentre in validazione uno e due fattori sono sostanzialmente pari e tre sono peggiori. Un secondo ritardo nella dinamica del fattore non migliora il BIC. Il modello a due fattori resta nel backtest come controllo di robustezza.
 
 ### Valutazione
 
@@ -64,6 +94,9 @@ Da fare.
 - **Date di rilascio in gran parte stimate**: per quasi tutte le serie lo storico usa un ritardo fisso, mentre il calendario reale varia di qualche giorno. Gli orizzonti del backtest vanno letti con questa tolleranza.
 - **Data del PIL**: 30 giorni dalla fine del trimestre, cioè la stima preliminare ISTAT. Le edizioni storiche dei conti trimestrali ISTAT, che permetterebbero di valutare contro la prima stima, non sono ancora integrate.
 - **Campione**: vendite al dettaglio dal 2000 e commercio estero dal 2002 limitano il campione comune a circa 98 trimestri.
+- **Intervalli dei modelli**: la deviazione standard del bridge e degli AR considera solo l'errore della regressione, non l'incertezza sui mesi completati né quella dei parametri. Gli intervalli della dashboard si baseranno sugli errori del backtest.
+- **Finestra Covid scelta a posteriori**: escludere marzo-settembre 2020 dalla stima è una decisione presa sapendo com'è andata; nel 2020 nessuno aveva questa informazione.
+- **Validazione corta**: i 16 trimestri usati per scegliere i fattori includono la crisi del 2008-2009 e non distinguono uno da due fattori.
 - **Aprile 2020**: le inchieste sulla fiducia non furono condotte; il mese è mancante.
 - **Fiducia dei consumatori**: l'8 ottobre 2026 il dato di settembre non era ancora disponibile, a differenza delle altre inchieste. Il ritardo zero assegnato alla serie potrebbe essere ottimistico.
 
@@ -74,7 +107,9 @@ conda create -n nowcast python=3.12
 conda activate nowcast
 pip install -e ".[dev]"
 cp .env.example .env        # poi inserire la chiave FRED (gratuita)
-python -m nowcast.pipeline update-data
+python -m nowcast.pipeline update-data      # scarica e aggiorna i dati
+python -m nowcast.pipeline nowcast          # stima del trimestre in corso
+python -m nowcast.pipeline select-factors   # evidenze sulla scelta dei fattori
 pytest
 ```
 

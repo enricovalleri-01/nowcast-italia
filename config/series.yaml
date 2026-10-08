@@ -4,7 +4,9 @@
 # transform         applicata dopo lo snapshot: none | diff | pct_change | log_diff
 # release_lag_days  giorni tra la fine del periodo di riferimento e la pubblicazione.
 #                   È una stima del ritardo tipico, usata quando manca la data reale.
-# block             gruppo economico (per il DFM e per la dashboard)
+# block             gruppo economico (per la dashboard)
+# dfm               (opzionale) trasformazione usata nel DFM se diversa da `transform`,
+#                   oppure `exclude` per le serie che sono combinazioni di altre.
 #
 # Codici verificati sulle API l'8 ottobre 2026.
 
@@ -79,6 +81,7 @@ series:
     transform: none
     release_lag_days: 0  # esce negli ultimi giorni del mese di riferimento
     block: survey
+    dfm: exclude  # sintesi delle fiducie settoriali, già incluse
 
   - id: conf_industry
     name: Fiducia dell'industria (saldo)
@@ -89,6 +92,7 @@ series:
     transform: none
     release_lag_days: 0
     block: survey
+    dfm: diff  # in livelli è quasi a radice unitaria
 
   - id: conf_services
     name: Fiducia dei servizi (saldo)
@@ -99,6 +103,7 @@ series:
     transform: none
     release_lag_days: 0
     block: survey
+    dfm: diff  # in livelli è quasi a radice unitaria
 
   - id: conf_consumer
     name: Fiducia dei consumatori (saldo)
@@ -109,6 +114,7 @@ series:
     transform: none
     release_lag_days: 0
     block: survey
+    dfm: diff  # in livelli è quasi a radice unitaria
 
   - id: hicp
     name: HICP, indice generale (ECOICOP v2, 2025=100)
@@ -129,6 +135,7 @@ series:
     transform: diff
     release_lag_days: 14  # ritardo della fonte; sul mercato il dato è noto a fine mese
     block: financial
+    dfm: exclude  # uguale a Bund + spread, già inclusi
 
   - id: yield_de_10y
     name: Rendimento titoli di Stato a 10 anni, Germania

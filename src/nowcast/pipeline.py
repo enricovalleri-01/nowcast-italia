@@ -1,4 +1,4 @@
-"""Comandi del progetto. Uso: python -m nowcast.pipeline update-data"""
+"""Comandi del progetto. Uso: python -m nowcast.pipeline {update-data,nowcast,select-factors}"""
 
 from __future__ import annotations
 
@@ -12,6 +12,11 @@ from nowcast.config import ROOT, SeriesSpec, load_series
 from nowcast.data import cache
 from nowcast.data.sources import ecb, eurostat, fred
 from nowcast.data.vintages import assign_release_dates, derive_difference
+from nowcast.models import selection
+from nowcast.models.base import Model, Nowcast, build_info, next_unpublished_quarter
+from nowcast.models.benchmark import ARBenchmark, HistoricalMean
+from nowcast.models.bridge import Bridge
+from nowcast.models.dfm import DFM
 from nowcast.transforms import daily_to_monthly
 
 log = logging.getLogger("nowcast")
@@ -61,14 +66,48 @@ def update_data(today: pd.Timestamp | None = None) -> pd.DataFrame:
     return observations
 
 
+def default_models() -> list[Model]:
+    return [HistoricalMean(), ARBenchmark(1), ARBenchmark(2), Bridge(), DFM(1), DFM(2)]
+
+
+def run_nowcast(as_of: pd.Timestamp | None = None) -> list[Nowcast]:
+    """Nowcast di tutti i modelli per il primo trimestre non ancora pubblicato."""
+    as_of = (as_of or pd.Timestamp.today()).normalize()
+    info = build_info(cache.load_observations(), load_series(), as_of)
+    target = next_unpublished_quarter(info)
+    results = [model.nowcast(info, target) for model in default_models()]
+    log.info(
+        "Nowcast del PIL t/t, trimestre che termina il %s (dati al %s)", target.date(), as_of.date()
+    )
+    for r in results:
+        log.info("%-14s %+.2f%%  (dev. std. %.2f)", r.model, r.mean, r.std)
+    return results
+
+
+def run_factor_selection() -> None:
+    """Stampa le evidenze sulla scelta del numero di fattori (solo dati fino al 2011)."""
+    observations, specs = cache.load_observations(), load_series()
+    log.info(
+        "Criteri di Bai e Ng\n%s\n", selection.information_criteria(observations, specs).round(3)
+    )
+    grid = [(1, 1), (1, 2), (2, 1), (2, 2), (3, 1)]
+    log.info("BIC del modello\n%s\n", selection.model_bic(observations, specs, grid).round(1))
+    rmse = selection.validation_rmse(observations, specs, [1, 2, 3], [90, 60, 30])
+    log.info("RMSE di validazione 2008-2011, per giorni alla pubblicazione\n%s", rmse.round(3))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["update-data"])
+    parser.add_argument("command", choices=["update-data", "nowcast", "select-factors"])
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     load_dotenv(ROOT / ".env")
     if args.command == "update-data":
         update_data()
+    elif args.command == "nowcast":
+        run_nowcast()
+    else:
+        run_factor_selection()
 
 
 if __name__ == "__main__":

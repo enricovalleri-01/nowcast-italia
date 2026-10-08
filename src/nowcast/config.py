@@ -15,6 +15,7 @@ DATA_DIR = ROOT / "data"
 SOURCES = {"eurostat", "ecb", "fred", "derived"}
 FREQUENCIES = {"M", "Q"}
 TRANSFORMS = {"none", "diff", "pct_change", "log_diff"}
+DFM_EXCLUDE = "exclude"
 _COMMON = {"id", "name", "source", "frequency", "transform", "release_lag_days", "block", "role"}
 _REQUIRED_PARAMS = {
     "eurostat": {"dataset", "filters"},
@@ -50,6 +51,8 @@ def parse_spec(raw: dict[str, Any]) -> SeriesSpec:
     _check(raw["frequency"] in FREQUENCIES, f"{sid}: frequenza non valida {raw['frequency']}")
     _check(raw["transform"] in TRANSFORMS, f"{sid}: trasformazione non valida {raw['transform']}")
     params = {k: v for k, v in raw.items() if k not in _COMMON}
+    dfm = params.get("dfm", raw["transform"])
+    _check(dfm in TRANSFORMS | {DFM_EXCLUDE}, f"{sid}: valore di dfm non valido {dfm}")
     absent = _REQUIRED_PARAMS[raw["source"]] - params.keys()
     _check(not absent, f"{sid}: parametri mancanti per {raw['source']}: {sorted(absent)}")
     common = {k: raw[k] for k in _COMMON if k in raw}

@@ -1,0 +1,211 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+from nowcast.config import SeriesSpec
+from nowcast.data.vintages import assign_release_dates
+from nowcast.models.ar import fit_ar, forecast_ar, select_order
+from nowcast.models.base import (
+    InfoSet,
+    build_info,
+    in_covid,
+    next_unpublished_quarter,
+    quarters_between,
+)
+from nowcast.models.benchmark import ARBenchmark, HistoricalMean
+from nowcast.models.bridge import Bridge, complete_months, quarterly_regressor, rebuild_levels
+from nowcast.models.dfm import DFM, bai_ng_ic, max_root, monthly_endog
+from nowcast.transforms import apply_transform, monthly_to_quarterly
+
+
+def simulate_ar(phi: list[float], n: int, seed: int = 0, const: float = 0.0) -> pd.Series:
+    rng = np.random.default_rng(seed)
+    y = np.zeros(n)
+    for t in range(len(phi), n):
+        y[t] = const + sum(p * y[t - 1 - j] for j, p in enumerate(phi)) + rng.normal()
+    return pd.Series(y)
+
+
+def synthetic_info(seed: int = 0, months: int = 240, last_gdp: str = "2019-09-30") -> InfoSet:
+    """Un fattore AR(1) mensile guida tre indicatori e, via media trimestrale, il PIL."""
+    rng = np.random.default_rng(seed)
+    index = pd.date_range("2000-01-31", periods=months, freq="ME")
+    factor = simulate_ar([0.5], months, seed).to_numpy()
+    growth = {f"x{i}": factor + 0.3 * rng.normal(size=months) for i in range(3)}
+    levels = pd.DataFrame(
+        {k: 100 * np.cumprod(1 + v / 100) for k, v in growth.items()}, index=index
+    )
+    gdp = 0.2 + 0.5 * monthly_to_quarterly(pd.Series(factor, index=index))
+    gdp = (gdp + 0.05 * rng.normal(size=len(gdp))).rename("gdp")
+    kinds = {k: "pct_change" for k in growth}
+    return InfoSet(index[-1], levels, gdp[gdp.index <= last_gdp], kinds, kinds)
+
+
+# --- AR
+
+
+def test_fit_ar_recovers_coefficient_and_sigma() -> None:
+    fit = fit_ar(simulate_ar([0.6], 5000, const=1.0), 1)
+    assert fit.coefs == pytest.approx([1.0, 0.6], abs=0.05)
+    assert fit.sigma == pytest.approx(1.0, abs=0.05)
+
+
+def test_fit_ar_drops_rows_touching_missing_values() -> None:
+    y = simulate_ar([0.5], 50)
+    y.iloc[20] = np.nan
+    assert fit_ar(y, 2).nobs == 50 - 2 - 3  # la riga mancante e le due che la usano come ritardo
+
+
+def test_select_order_finds_ar2() -> None:
+    assert select_order(simulate_ar([0.5, -0.4], 3000), 6) == 2
+
+
+def test_forecast_ar_one_step_and_long_run() -> None:
+    fit = fit_ar(simulate_ar([0.6], 5000, const=1.0), 1)
+    means, stds = forecast_ar(np.array([2.0]), fit, 60)
+    assert means[0] == pytest.approx(fit.coefs[0] + fit.coefs[1] * 2.0)
+    assert stds[0] == pytest.approx(fit.sigma)
+    assert (np.diff(stds) >= 0).all() and stds[1] > stds[0]
+    assert means[-1] == pytest.approx(fit.coefs[0] / (1 - fit.coefs[1]), abs=1e-6)
+    assert stds[-1] == pytest.approx(fit.sigma / np.sqrt(1 - fit.coefs[1] ** 2), abs=1e-6)
+
+
+# --- set informativo
+
+
+def test_in_covid_flags_only_the_excluded_window() -> None:
+    index = pd.DatetimeIndex(["2020-02-29", "2020-03-31", "2020-09-30", "2020-12-31"])
+    assert in_covid(index).tolist() == [False, True, True, False]
+
+
+def test_build_info_hides_gdp_not_yet_published() -> None:
+    gdp = SeriesSpec("gdp", "PIL", "eurostat", "Q", "pct_change", 30, "target", role="target")
+    ip = SeriesSpec("ip", "IP", "eurostat", "M", "pct_change", 40, "real")
+    today = pd.Timestamp("2026-10-08")
+    quarters = pd.Series(
+        np.linspace(100, 110, 20), index=pd.date_range("2021-09-30", periods=20, freq="QE")
+    )
+    months = pd.Series(
+        np.linspace(100, 105, 60), index=pd.date_range("2021-09-30", periods=60, freq="ME")
+    )
+    obs = pd.concat(
+        [assign_release_dates(quarters, gdp, today), assign_release_dates(months, ip, today)]
+    )
+    before = build_info(obs, [gdp, ip], pd.Timestamp("2026-07-29"))
+    after = build_info(obs, [gdp, ip], pd.Timestamp("2026-07-30"))
+    assert before.gdp_growth.index[-1] == pd.Timestamp("2026-03-31")
+    assert after.gdp_growth.index[-1] == pd.Timestamp("2026-06-30")
+    assert next_unpublished_quarter(before) == pd.Timestamp("2026-06-30")
+    assert before.monthly_levels["ip"].last_valid_index() == pd.Timestamp("2026-05-31")
+
+
+def test_quarters_between() -> None:
+    assert quarters_between(pd.Timestamp("2025-12-31"), pd.Timestamp("2026-06-30")) == 2
+
+
+# --- benchmark
+
+
+def test_historical_mean_ignores_covid_quarters() -> None:
+    info = synthetic_info(months=264, last_gdp="2021-12-31")
+    shocked = info.gdp_growth.copy()
+    shocked[pd.Timestamp("2020-06-30")] = -12.0
+    target = pd.Timestamp("2022-03-31")
+    base = HistoricalMean().nowcast(info, target)
+    info_shocked = InfoSet(
+        info.as_of, info.monthly_levels, shocked, info.transforms, info.dfm_transforms
+    )
+    assert HistoricalMean().nowcast(info_shocked, target).mean == pytest.approx(base.mean)
+
+
+def test_ar_benchmark_uncertainty_grows_when_previous_quarter_is_missing() -> None:
+    info = synthetic_info()
+    one = ARBenchmark(1).nowcast(info, pd.Timestamp("2019-12-31"))
+    two = ARBenchmark(1).nowcast(info, pd.Timestamp("2020-03-31"))
+    assert one.model == "ar1" and two.std > one.std
+
+
+# --- bridge
+
+
+@pytest.mark.parametrize("kind", ["none", "diff", "pct_change", "log_diff"])
+def test_rebuild_levels_inverts_the_transform(kind: str) -> None:
+    levels = pd.Series([100.0, 103.0, 101.0, 106.0])
+    changes = apply_transform(levels, kind).to_numpy()[1:]
+    assert rebuild_levels(100.0, changes, kind) == pytest.approx(levels.to_numpy()[1:])
+
+
+def test_complete_months_extends_to_target_and_keeps_observed_values() -> None:
+    info = synthetic_info()
+    observed = info.monthly_levels["x0"].iloc[:-2]
+    completed = complete_months(
+        observed.reindex(info.monthly_levels.index), "pct_change", pd.Timestamp("2019-12-31")
+    )
+    assert completed.index[-1] == pd.Timestamp("2019-12-31")
+    assert completed.loc[observed.index].equals(observed)
+    assert completed.notna().all()
+
+
+def test_quarterly_regressor_is_growth_of_the_quarterly_average() -> None:
+    index = pd.date_range("2026-01-31", periods=6, freq="ME")
+    levels = pd.Series([100.0, 100.0, 100.0, 110.0, 110.0, 110.0], index=index)
+    assert quarterly_regressor(levels, "pct_change").iloc[-1] == pytest.approx(10.0)
+
+
+def test_bridge_recovers_a_known_relationship() -> None:
+    info = synthetic_info(last_gdp="2019-09-30")
+    truth = synthetic_info(last_gdp="2019-12-31").gdp_growth
+    target = pd.Timestamp("2019-12-31")
+    model = Bridge(indicators=("x0", "x1"))
+    result = model.nowcast(info, target)
+    assert result.mean == pytest.approx(truth[target], abs=3 * result.std)
+    assert result.std < 0.5 * info.gdp_growth.std()
+
+
+def test_bridge_fills_the_ragged_edge_before_aggregating() -> None:
+    info = synthetic_info()
+    ragged = info.monthly_levels.copy()
+    ragged.iloc[-2:, 0] = np.nan
+    info = InfoSet(info.as_of, ragged, info.gdp_growth, info.transforms, info.dfm_transforms)
+    regressors = Bridge(indicators=("x0", "x1")).regressors(info, pd.Timestamp("2019-12-31"))
+    assert regressors.loc[pd.Timestamp("2019-12-31")].notna().all()
+
+
+# --- DFM
+
+
+def test_bai_ng_finds_the_true_number_of_factors() -> None:
+    rng = np.random.default_rng(1)
+    factors = rng.normal(size=(300, 2))
+    loadings = rng.uniform(0.5, 1.5, size=(2, 60)) * rng.choice([-1, 1], size=(2, 60))
+    panel = pd.DataFrame(factors @ loadings + 0.5 * rng.normal(size=(300, 60)))
+    table = bai_ng_ic(panel, 6)
+    assert table["ICp1"].idxmin() == 2 and table["ICp2"].idxmin() == 2
+    assert table["varianza_spiegata"].is_monotonic_increasing
+
+
+def test_monthly_endog_uses_dfm_series_and_reaches_the_target_month() -> None:
+    info = synthetic_info()
+    info = InfoSet(
+        info.as_of,
+        info.monthly_levels,
+        info.gdp_growth,
+        info.transforms,
+        {"x0": "pct_change", "x2": "diff"},
+    )
+    panel = monthly_endog(info, pd.Timestamp("2020-03-31"))
+    assert list(panel.columns) == ["x0", "x2"]
+    assert panel.index[-1] == pd.Timestamp("2020-03-31")
+    assert panel.iloc[-1].isna().all()
+
+
+def test_dfm_nowcast_tracks_the_common_factor() -> None:
+    info = synthetic_info(last_gdp="2019-09-30")
+    truth = synthetic_info(last_gdp="2019-12-31").gdp_growth
+    target = pd.Timestamp("2019-12-31")
+    model = DFM(factors=1, maxiter=100)
+    estimated = model.estimate(info, target)
+    result = model.nowcast(info, target, estimated)
+    assert max_root(estimated) < 1
+    assert result.mean == pytest.approx(truth[target], abs=3 * result.std)
+    assert result.std < 0.6 * info.gdp_growth.std()
