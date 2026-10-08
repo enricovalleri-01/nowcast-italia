@@ -32,7 +32,7 @@ report "nessun file di chiavi o credenziali nella storia" \
   "$(printf '%s\n' "$files" | grep -iE '\.(pem|key|p12|pfx)$|credential|secret|id_rsa')"
 
 report "nessun file di dati nei branch del codice" \
-  "$(git log --exclude=refs/heads/data --branches --name-only --format= | sort -u | grep -E '^data/|\.parquet$')"
+  "$(git log --exclude=data --branches --name-only --format= | sort -u | grep -E '^data/|\.parquet$')"
 
 if [ -f .env ]; then
   key=$(grep -E '^FRED_API_KEY=' .env | cut -d= -f2-)
