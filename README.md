@@ -196,7 +196,7 @@ Non cambiano i modelli, gli orizzonti, le metriche, le finestre né i test. Gli 
 
 ## Risultati
 
-Backtest eseguito l'8 ottobre 2026 secondo il protocollo v1.1: dataset `ef2b22705503`, specificazione al commit `0a09f41`, 58 trimestri, 2.088 previsioni. Tutte le tabelle, comprese quelle non riportate qui, sono in [results/report.md](results/report.md); le singole previsioni, con data dell'orizzonte e impronta del dataset, in [results/backtest.csv](results/backtest.csv). Errori in punti percentuali di crescita t/t.
+Backtest eseguito l'8 ottobre 2026 secondo il protocollo v1.1: dataset `ef2b22705503`, specificazione al commit `0a09f41` (oggi `18fb18c` dopo la riscrittura degli autori, vedi [HISTORY.md](HISTORY.md)), 58 trimestri, 2.088 previsioni. Tutte le tabelle, comprese quelle non riportate qui, sono in [results/report.md](results/report.md); le singole previsioni, con data dell'orizzonte e impronta del dataset, in [results/backtest.csv](results/backtest.csv). Errori in punti percentuali di crescita t/t.
 
 **In sintesi: nei periodi ordinari nessun modello batte l'AR(1) in modo statisticamente distinguibile, e il DFM fa peggio.** Nessuno dei 12 confronti confermativi mostra un modello significativamente migliore del benchmark; uno mostra il DFM significativamente peggiore.
 
