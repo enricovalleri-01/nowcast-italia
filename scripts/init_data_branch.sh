@@ -40,5 +40,5 @@ git -C "$work" -c user.name="$(git config user.name)" -c user.email="$(git confi
 git fetch -q "$work" data:data
 
 echo "Branch data creato in locale (nessun push):"
-git log --format='  %h %ae %s' -1 data
-git ls-tree -r --name-only data | sed 's/^/  /'
+git log --format='  %h %ae %s' -1 refs/heads/data --
+git ls-tree -r --name-only refs/heads/data | sed 's/^/  /'
