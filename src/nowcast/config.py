@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import pandas as pd
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +19,7 @@ FREQUENCIES = {"M", "Q"}
 TRANSFORMS = {"none", "diff", "pct_change", "log_diff"}
 DFM_EXCLUDE = "exclude"
 _COMMON = {"id", "name", "source", "frequency", "transform", "release_lag_days", "block", "role"}
+_LAG_HISTORY = "release_lag_history"
 _REQUIRED_PARAMS = {
     "eurostat": {"dataset", "filters"},
     "ecb": {"flow", "key"},
@@ -36,6 +39,15 @@ class SeriesSpec:
     block: str
     role: str = "indicator"
     params: dict[str, Any] = field(default_factory=dict)
+    # Regimi passati: (ultimo periodo a cui si applica, giorni), in ordine cronologico.
+    lag_history: tuple[tuple[pd.Timestamp, int], ...] = ()
+
+    def lag_days(self, periods: pd.DatetimeIndex) -> np.ndarray:
+        """Ritardo di pubblicazione in vigore per ciascun periodo di riferimento."""
+        days = np.full(len(periods), self.release_lag_days)
+        for until, value in reversed(self.lag_history):
+            days = np.where(periods <= until, value, days)
+        return days
 
 
 def _check(condition: bool, message: str) -> None:
@@ -50,13 +62,17 @@ def parse_spec(raw: dict[str, Any]) -> SeriesSpec:
     _check(raw["source"] in SOURCES, f"{sid}: fonte sconosciuta {raw['source']}")
     _check(raw["frequency"] in FREQUENCIES, f"{sid}: frequenza non valida {raw['frequency']}")
     _check(raw["transform"] in TRANSFORMS, f"{sid}: trasformazione non valida {raw['transform']}")
-    params = {k: v for k, v in raw.items() if k not in _COMMON}
+    params = {k: v for k, v in raw.items() if k not in _COMMON | {_LAG_HISTORY}}
+    history = tuple(
+        (pd.Timestamp(item["until"]), int(item["days"])) for item in raw.get(_LAG_HISTORY, [])
+    )
+    _check(list(history) == sorted(history), f"{sid}: regimi di ritardo non in ordine")
     dfm = params.get("dfm", raw["transform"])
     _check(dfm in TRANSFORMS | {DFM_EXCLUDE}, f"{sid}: valore di dfm non valido {dfm}")
     absent = _REQUIRED_PARAMS[raw["source"]] - params.keys()
     _check(not absent, f"{sid}: parametri mancanti per {raw['source']}: {sorted(absent)}")
     common = {k: raw[k] for k in _COMMON if k in raw}
-    return SeriesSpec(**common, params=params)
+    return SeriesSpec(**common, params=params, lag_history=history)
 
 
 def load_series(path: Path = SERIES_PATH) -> list[SeriesSpec]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -34,5 +35,12 @@ def load_observations(path: Path = OBSERVATIONS_PATH) -> pd.DataFrame:
 
 def save_observations(observations: pd.DataFrame, path: Path = OBSERVATIONS_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    ordered = observations.sort_values(["series_id", "ref_period"]).reset_index(drop=True)
-    ordered.to_parquet(path, index=False)
+    ordered = observations.sort_values(["series_id", "ref_period", "release_date"])
+    ordered.reset_index(drop=True).to_parquet(path, index=False)
+
+
+def dataset_version(observations: pd.DataFrame) -> str:
+    """Impronta del contenuto della tabella: identifica il dataset usato da una valutazione."""
+    ordered = observations.sort_values(["series_id", "ref_period", "release_date"])
+    digest = hashlib.sha256(pd.util.hash_pandas_object(ordered, index=False).to_numpy().tobytes())
+    return digest.hexdigest()[:12]

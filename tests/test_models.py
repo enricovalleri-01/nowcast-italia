@@ -4,11 +4,12 @@ import pytest
 
 from nowcast.config import SeriesSpec
 from nowcast.data.vintages import assign_release_dates
-from nowcast.models.ar import fit_ar, forecast_ar, select_order
+from nowcast.models.ar import _design, fit_ar, forecast_ar, select_order
 from nowcast.models.base import (
+    COVID_WINDOW,
     InfoSet,
     build_info,
-    in_covid,
+    in_window,
     next_unpublished_quarter,
     quarters_between,
 )
@@ -60,6 +61,21 @@ def test_select_order_finds_ar2() -> None:
     assert select_order(simulate_ar([0.5, -0.4], 3000), 6) == 2
 
 
+def test_orders_are_compared_on_identical_rows_even_with_gaps() -> None:
+    y = simulate_ar([0.5], 100)
+    y.iloc[40:43] = np.nan
+    samples = [fit_ar(y, p, sample_order=6).nobs for p in range(1, 7)]
+    assert len(set(samples)) == 1
+    assert samples[0] == 100 - 6 - (3 + 6)  # inizio campione, buco e righe che lo usano
+
+
+def test_gap_does_not_join_distant_periods() -> None:
+    y = pd.Series([1.0, 2.0, np.nan, 4.0, 5.0, 6.0])
+    x, target = _design(y, 1, 1)
+    assert target.tolist() == [2.0, 5.0, 6.0]  # 4.0 non ha un ritardo valido
+    assert x[:, 1].tolist() == [1.0, 4.0, 5.0]
+
+
 def test_forecast_ar_one_step_and_long_run() -> None:
     fit = fit_ar(simulate_ar([0.6], 5000, const=1.0), 1)
     means, stds = forecast_ar(np.array([2.0]), fit, 60)
@@ -73,9 +89,10 @@ def test_forecast_ar_one_step_and_long_run() -> None:
 # --- set informativo
 
 
-def test_in_covid_flags_only_the_excluded_window() -> None:
+def test_in_window_flags_only_the_given_period() -> None:
     index = pd.DatetimeIndex(["2020-02-29", "2020-03-31", "2020-09-30", "2020-12-31"])
-    assert in_covid(index).tolist() == [False, True, True, False]
+    assert in_window(index, COVID_WINDOW).tolist() == [False, True, True, False]
+    assert not in_window(index, None).any()
 
 
 def test_build_info_hides_gdp_not_yet_published() -> None:
@@ -106,16 +123,28 @@ def test_quarters_between() -> None:
 # --- benchmark
 
 
-def test_historical_mean_ignores_covid_quarters() -> None:
+def covid_info() -> InfoSet:
     info = synthetic_info(months=264, last_gdp="2021-12-31")
     shocked = info.gdp_growth.copy()
     shocked[pd.Timestamp("2020-06-30")] = -12.0
-    target = pd.Timestamp("2022-03-31")
-    base = HistoricalMean().nowcast(info, target)
-    info_shocked = InfoSet(
-        info.as_of, info.monthly_levels, shocked, info.transforms, info.dfm_transforms
-    )
-    assert HistoricalMean().nowcast(info_shocked, target).mean == pytest.approx(base.mean)
+    return InfoSet(info.as_of, info.monthly_levels, shocked, info.transforms, info.dfm_transforms)
+
+
+def test_models_use_all_data_by_default() -> None:
+    info, target = covid_info(), pd.Timestamp("2022-03-31")
+    assert HistoricalMean().nowcast(info, target).mean == pytest.approx(info.gdp_growth.mean())
+
+
+def test_ex_post_variant_excludes_the_window_and_is_named_differently() -> None:
+    info, target = covid_info(), pd.Timestamp("2022-03-31")
+    ex_post = HistoricalMean(exclude=COVID_WINDOW).nowcast(info, target)
+    quarters = pd.DatetimeIndex(["2020-03-31", "2020-06-30", "2020-09-30"])
+    expected = info.gdp_growth.drop(quarters).mean()
+    assert ex_post.mean == pytest.approx(expected)
+    assert ex_post.model == "media_storica_expost"
+    assert ARBenchmark(1, exclude=COVID_WINDOW).name == "ar1_expost"
+    assert Bridge(exclude=COVID_WINDOW).name == "bridge_expost"
+    assert DFM(1, exclude=COVID_WINDOW).name == "dfm_k1_expost"
 
 
 def test_ar_benchmark_uncertainty_grows_when_previous_quarter_is_missing() -> None:
@@ -203,9 +232,40 @@ def test_dfm_nowcast_tracks_the_common_factor() -> None:
     info = synthetic_info(last_gdp="2019-09-30")
     truth = synthetic_info(last_gdp="2019-12-31").gdp_growth
     target = pd.Timestamp("2019-12-31")
-    model = DFM(factors=1, maxiter=100)
-    estimated = model.estimate(info, target)
-    result = model.nowcast(info, target, estimated)
-    assert max_root(estimated) < 1
+    model = DFM(factors=1, maxiter=1000)
+    estimate = model.estimate(info, target)
+    result = model.nowcast(info, target, estimate)
+    assert max_root(estimate.results) < 1
+    assert estimate.as_of == info.as_of
     assert result.mean == pytest.approx(truth[target], abs=3 * result.std)
     assert result.std < 0.6 * info.gdp_growth.std()
+
+
+def earlier(info: InfoSet, months: int) -> InfoSet:
+    """Lo stesso set informativo come sarebbe stato `months` mesi prima."""
+    levels = info.monthly_levels.iloc[:-months]
+    gdp = info.gdp_growth[info.gdp_growth.index <= levels.index[-1] - pd.Timedelta(days=45)]
+    return InfoSet(levels.index[-1], levels, gdp, info.transforms, info.dfm_transforms)
+
+
+def test_dfm_rejects_parameters_estimated_in_the_future() -> None:
+    info = synthetic_info()
+    past = earlier(info, 12)
+    model = DFM(factors=1, maxiter=1000)
+    future_estimate = model.estimate(info, pd.Timestamp("2019-12-31"))
+    with pytest.raises(ValueError, match="successiva al set informativo"):
+        model.nowcast(past, pd.Timestamp("2018-12-31"), future_estimate)
+
+
+def test_dfm_accepts_parameters_estimated_in_the_past() -> None:
+    info = synthetic_info()
+    model = DFM(factors=1, maxiter=1000)
+    past_estimate = model.estimate(earlier(info, 12), pd.Timestamp("2018-12-31"))
+    result = model.nowcast(info, pd.Timestamp("2019-12-31"), past_estimate)
+    assert np.isfinite(result.mean)
+
+
+def test_dfm_rejects_an_estimate_that_did_not_converge() -> None:
+    info = synthetic_info()
+    with pytest.warns(Warning), pytest.raises(ValueError, match="non convergente"):
+        DFM(factors=1, maxiter=1).estimate(info, pd.Timestamp("2019-12-31"))

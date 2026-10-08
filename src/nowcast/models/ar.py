@@ -19,17 +19,22 @@ class ARFit:
         return len(self.coefs) - 1
 
 
-def _design(y: pd.Series, order: int) -> tuple[np.ndarray, np.ndarray]:
-    """Regressori ritardati; le righe con un mancante (anche tra i ritardi) sono scartate."""
-    lags = pd.concat([y.shift(k) for k in range(1, order + 1)], axis=1)
+def _design(y: pd.Series, order: int, sample_order: int) -> tuple[np.ndarray, np.ndarray]:
+    """Regressori ritardati.
+
+    Una riga entra nella stima solo se sono presenti il valore e tutti i ritardi fino a
+    `sample_order`: così ordini diversi possono essere stimati sulle stesse identiche date.
+    I ritardi seguono l'indice della serie, quindi un buco non avvicina periodi distanti.
+    """
+    lags = pd.concat([y.shift(k) for k in range(1, sample_order + 1)], axis=1)
     rows = (y.notna() & lags.notna().all(axis=1)).to_numpy()
-    x = np.column_stack([np.ones(int(rows.sum())), lags.to_numpy()[rows]])
+    x = np.column_stack([np.ones(int(rows.sum())), lags.to_numpy()[rows, :order]])
     return x, y.to_numpy()[rows]
 
 
-def fit_ar(y: pd.Series, order: int) -> ARFit:
+def fit_ar(y: pd.Series, order: int, sample_order: int | None = None) -> ARFit:
     """Stima AR(order). I NaN in `y` escludono dalla stima le righe che li coinvolgono."""
-    x, target = _design(y, order)
+    x, target = _design(y, order, max(order, sample_order or order))
     if len(target) <= order + 1:
         raise ValueError("osservazioni insufficienti per stimare l'AR")
     coefs, *_ = np.linalg.lstsq(x, target, rcond=None)
@@ -43,10 +48,8 @@ def bic(fit: ARFit) -> float:
 
 
 def select_order(y: pd.Series, max_order: int) -> int:
-    """Ordine con BIC minimo, a parità di campione di stima."""
-    trimmed = y.copy()
-    trimmed.iloc[:max_order] = np.nan  # stesso campione effettivo per tutti gli ordini
-    scores = {p: bic(fit_ar(trimmed, p)) for p in range(1, max_order + 1)}
+    """Ordine con BIC minimo; tutti gli ordini sono confrontati sulle stesse righe."""
+    scores = {p: bic(fit_ar(y, p, sample_order=max_order)) for p in range(1, max_order + 1)}
     return min(scores, key=lambda p: scores[p])
 
 

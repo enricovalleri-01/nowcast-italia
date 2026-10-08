@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-import warnings
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.statespace.dynamic_factor_mq import DynamicFactorMQ
 
-from nowcast.models.base import InfoSet, Nowcast, mask_covid, stationary_panel
+from nowcast.models.base import (
+    InfoSet,
+    Nowcast,
+    Window,
+    mask_window,
+    stationary_panel,
+    variant_name,
+)
 
 # Scelta motivata nel README (sezione Modelli) e riproducibile con `select-factors`.
 DEFAULT_FACTORS = 1
@@ -30,8 +37,17 @@ def with_period_index(data: pd.DataFrame, frequency: str) -> pd.DataFrame:
     return data.set_axis(pd.DatetimeIndex(data.index).to_period(frequency), axis=0)
 
 
-def masked(data: pd.DataFrame) -> pd.DataFrame:
-    return data.apply(mask_covid)
+@dataclass(frozen=True)
+class DFMEstimate:
+    """Parametri stimati, con la data e le serie del set informativo che li ha prodotti."""
+
+    results: Any  # DynamicFactorMQResults
+    as_of: pd.Timestamp
+    columns: tuple[str, ...]
+
+
+def masked(data: pd.DataFrame, window: Window | None) -> pd.DataFrame:
+    return data.apply(lambda column: mask_window(column, window))
 
 
 def max_root(results: Any) -> float:
@@ -42,23 +58,25 @@ def max_root(results: Any) -> float:
 class DFM:
     """Fattori comuni mensili; il PIL trimestrale entra con l'aggregazione di Mariano-Murasawa.
 
-    I parametri sono stimati (EM) con la finestra Covid oscurata, poi il filtro di Kalman
-    viene applicato ai dati completi: il 2020 non distorce i parametri ma resta nei dati
-    su cui si calcola il nowcast.
+    I parametri sono stimati con l'algoritmo EM, poi il filtro di Kalman viene applicato ai
+    dati di `info`. Con `exclude` i periodi della finestra restano fuori dalla stima dei
+    parametri ma non dai dati su cui si calcola il nowcast (variante ex post).
     """
 
     def __init__(
         self,
         factors: int = DEFAULT_FACTORS,
         factor_order: int = DEFAULT_FACTOR_ORDER,
-        maxiter: int = 300,
+        maxiter: int = 1000,
         transforms: dict[str, str] | None = None,
+        exclude: Window | None = None,
     ) -> None:
         self.transforms = transforms  # None: quelle indicate dal registro
         self.factors = factors
         self.factor_order = factor_order
         self.maxiter = maxiter
-        self.name = f"dfm_k{factors}"
+        self.exclude = exclude
+        self.name = variant_name(f"dfm_k{factors}", exclude)
 
     def _model(self, monthly: pd.DataFrame, quarterly: pd.DataFrame) -> DynamicFactorMQ:
         return DynamicFactorMQ(
@@ -70,33 +88,48 @@ class DFM:
             standardize=True,
         )
 
-    def estimate(self, info: InfoSet, target: pd.Timestamp) -> Any:
-        """Stima i parametri sui dati oscurati (risultato statsmodels)."""
-        monthly = monthly_endog(info, target, self.transforms)
-        quarterly = info.gdp_growth.to_frame()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            results = self._model(masked(monthly), masked(quarterly)).fit(
-                disp=False, maxiter=self.maxiter
-            )
+    def _check(self, results: Any) -> None:
+        """Rifiuta una stima che non è arrivata a convergenza o non è stazionaria."""
+        if results.mle_retvals["iter"] >= self.maxiter:
+            raise ValueError(f"{self.name}: EM non convergente in {self.maxiter} iterazioni")
         if max_root(results) >= 1:
             raise ValueError(f"{self.name}: stima non stazionaria (radice {max_root(results):.3f})")
-        return results
 
-    def fit(self, info: InfoSet, target: pd.Timestamp, estimated: Any | None = None) -> Any:
+    def estimate(self, info: InfoSet, target: pd.Timestamp) -> DFMEstimate:
+        """Stima i parametri sui dati di `info`."""
+        monthly = masked(monthly_endog(info, target, self.transforms), self.exclude)
+        quarterly = masked(info.gdp_growth.to_frame(), self.exclude)
+        results = self._model(monthly, quarterly).fit(disp=False, maxiter=self.maxiter)
+        self._check(results)
+        return DFMEstimate(results, info.as_of, tuple(monthly.columns))
+
+    def fit(self, info: InfoSet, target: pd.Timestamp, estimate: DFMEstimate | None = None) -> Any:
         """Applica i parametri stimati ai dati completi di `info`.
 
-        `estimated` permette di riusare parametri stimati su un set informativo precedente.
+        Si può riusare una stima precedente, mai una successiva alla data di `info`:
+        parametri e standardizzazione porterebbero nel passato informazione futura.
         """
-        estimated = estimated if estimated is not None else self.estimate(info, target)
-        monthly = with_period_index(monthly_endog(info, target, self.transforms), "M")
-        quarterly = with_period_index(info.gdp_growth.to_frame(), "Q")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return estimated.apply(monthly, endog_quarterly=quarterly, retain_standardization=True)
+        estimate = estimate if estimate is not None else self.estimate(info, target)
+        monthly = monthly_endog(info, target, self.transforms)
+        if estimate.as_of > info.as_of:
+            raise ValueError(
+                f"{self.name}: stima del {estimate.as_of.date()} successiva al set informativo "
+                f"del {info.as_of.date()}"
+            )
+        if estimate.columns != tuple(monthly.columns):
+            raise ValueError(
+                f"{self.name}: la stima usa serie diverse da quelle del set informativo"
+            )
+        return estimate.results.apply(
+            with_period_index(monthly, "M"),
+            endog_quarterly=with_period_index(info.gdp_growth.to_frame(), "Q"),
+            retain_standardization=True,
+        )
 
-    def nowcast(self, info: InfoSet, target: pd.Timestamp, estimated: Any | None = None) -> Nowcast:
-        results = self.fit(info, target, estimated)
+    def nowcast(
+        self, info: InfoSet, target: pd.Timestamp, estimate: DFMEstimate | None = None
+    ) -> Nowcast:
+        results = self.fit(info, target, estimate)
         month = target.to_period("M")
         prediction = results.get_prediction(start=month, end=month, information_set="smoothed")
         mean = float(prediction.predicted_mean["gdp"].iloc[0])

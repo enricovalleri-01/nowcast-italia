@@ -10,7 +10,7 @@ Il PIL trimestrale esce circa 30 giorni dopo la fine del trimestre. Nel frattemp
 
 ## Dati
 
-Diciotto serie, tutte gratuite, registrate in [config/series.yaml](config/series.yaml) con codice, trasformazione e ritardo di pubblicazione.
+Diciotto serie (lo spread è calcolato dai due rendimenti), tutte gratuite, registrate in [config/series.yaml](config/series.yaml) con codice, trasformazione e ritardo di pubblicazione.
 
 | Blocco | Serie | Fonte |
 |---|---|---|
@@ -36,15 +36,28 @@ Scelte sulle fonti:
 
 Ogni osservazione è salvata con la data in cui è diventata pubblica. La funzione `snapshot(osservazioni, data)` restituisce solo ciò che era noto a quella data ed è l'unico accesso ai dati previsto per modelli e backtest: così il set informativo di qualsiasi giorno passato si ricostruisce senza guardare avanti. Nel panel mensile le serie più lente restano mancanti negli ultimi mesi (il "ragged edge").
 
-La data di rilascio ha tre origini, dalla più alla meno affidabile:
+La data di rilascio ha quattro origini:
 
 | Origine | Significato | Copertura |
 |---|---|---|
 | `alfred` | prima pubblicazione dallo storico dei vintage ALFRED | Brent dal 2011, gas dal 2015 |
-| `first_seen` | il dato è comparso tra due download: vale la data del download | da ottobre 2026 in avanti, per tutte le serie |
-| `estimated_lag` | fine del periodo più il ritardo tipico della serie | tutto il resto dello storico |
+| `first_seen` | il dato è comparso tra due download: vale la data del download | da ottobre 2026 in avanti |
+| `revision` | il valore di un periodo già noto è cambiato: nuova riga con la data del download | da ottobre 2026 in avanti |
+| `estimated_lag` | fine del periodo più il ritardo di pubblicazione in vigore allora | il resto dello storico (circa il 96% delle righe) |
 
-I ritardi tipici sono stati controllati contro la disponibilità effettiva dei dati l'8 ottobre 2026. Per i rendimenti e l'Euribor il ritardo è quello della fonte, non quello del mercato: il backtest vede così gli stessi dati che vedrà il sistema quando gira dal vivo.
+Un valore registrato non viene mai riscritto: una revisione aggiunge una riga, quindi lo snapshot di una data passata resta identico dopo ogni aggiornamento. Ogni esecuzione stampa l'impronta del dataset usato, così una valutazione è legata a una versione precisa dei dati.
+
+I ritardi stimati seguono il calendario ISTAT dell'epoca e sono arrotondati per eccesso, perché una data troppo anticipata darebbe al modello informazione che non aveva. Dove il calendario è cambiato il registro distingue i regimi:
+
+| Serie | Ritardo | Riscontro |
+|---|---|---|
+| PIL, stima preliminare | 46 giorni fino al 2017-Q4, poi 32 | 2011-Q4 uscito il 15 febbraio 2012; 2018-Q1 il 2 maggio 2018 |
+| Vendite al dettaglio | 56 giorni fino al 2016, 43 nel 2017, poi 38 | luglio 2011 uscito il 23 settembre; gennaio 2017 il 15 marzo |
+| Produzione industriale | 43 giorni | luglio 2011 uscito il 12 settembre |
+| Commercio estero | 50 giorni | novembre 2011 uscito il 18 gennaio 2012 |
+| Disoccupazione | 33 giorni | dicembre 2011 uscito il 31 gennaio 2012 |
+
+Queste date reali sono verificate da un test: il ritardo stimato non deve precederle e non deve superarle di più di cinque giorni. Per rendimenti ed Euribor il ritardo è quello della fonte, non quello del mercato: il backtest vede gli stessi dati che vede il sistema dal vivo.
 
 ### Modelli
 
@@ -60,25 +73,31 @@ Tutti i modelli ricevono lo stesso set informativo e restituiscono la crescita t
 Scelte comuni:
 
 - **Indicatori del bridge fissati a priori**, non selezionati sul periodo di valutazione: due indicatori quantitativi e la fiducia sintetica.
-- **Covid escluso dalla stima, non dalle previsioni**: le osservazioni tra marzo e settembre 2020 non entrano nella stima dei parametri, ma restano nei dati su cui si calcola il nowcast. Con il 2020 dentro, la deviazione standard del PIL passa da 0,73 a 2,06 e ogni parametro ne viene dominato.
+- **Nessuna osservazione esclusa dalla stima.** I modelli principali usano tutti i dati noti a ogni data, 2020 compreso: è ciò che un modello fissato in anticipo avrebbe fatto. Il costo è visibile: con il 2020 nel campione la deviazione standard della crescita del PIL passa da 0,73 a 2,06 e gli intervalli si allargano.
+- **Variante ex post.** Ogni modello ha una versione `_expost` stimata senza marzo-settembre 2020. Usa un'informazione che nel 2020 non c'era, quindi serve solo a misurare quanto pesa il trattamento del Covid, non come risultato principale.
 
 Specificazione del DFM:
 
-- **Fiducie in differenze prime**. In livelli sono quasi a radice unitaria e finiscono per coincidere con il fattore: sui campioni che terminano nel 2008-2009 la stima diventa esplosiva (coefficiente autoregressivo sopra 1) e l'errore di validazione supera le migliaia di punti. In differenze il modello resta stazionario su tutta la finestra.
+- **Fiducie in differenze prime**. In livelli sono quasi a radice unitaria e finiscono per coincidere con il fattore: sui campioni che terminano nel 2008-2009 la stima diventa esplosiva (coefficiente autoregressivo sopra 1).
 - **ESI e rendimento italiano esclusi**: sono combinazioni di serie già presenti (le fiducie settoriali; Bund più spread).
-- **Controllo di stazionarietà**: una stima con radice maggiore o uguale a 1 viene rifiutata con un errore, invece di produrre un numero.
+- **Stime rifiutate invece che usate**: se l'algoritmo EM non converge o il modello non è stazionario, il codice si ferma con un errore.
+- **Parametri mai dal futuro**: una stima porta con sé la data del set informativo che l'ha prodotta e non può essere applicata a una data precedente.
 
-Numero di fattori. La scelta usa solo dati fino al 2011, prima dell'inizio del backtest, e si riproduce con `python -m nowcast.pipeline select-factors`.
+#### Finestra di sviluppo (dati fino al 2011)
+
+La specificazione del DFM è stata messa a punto guardando i risultati su questa finestra: la trasformazione delle fiducie è stata cambiata dopo aver visto le stime esplodere, e il numero di fattori è stato scelto qui. Gli errori riportati sotto non sono quindi una verifica indipendente. La verifica è il backtest dal 2012 in poi, per il quale tutte le scelte sono congelate. Le evidenze si riproducono con `python -m nowcast.pipeline select-factors`.
 
 | Fattori | Varianza spiegata | ICp2 (Bai-Ng) | BIC del modello | RMSE a 90 giorni | a 60 giorni | a 30 giorni |
 |---|---|---|---|---|---|---|
-| 1 | 22% | **−0,053** | **5.668** | **0,855** | 0,856 | 0,783 |
-| 2 | 34% | −0,020 | 5.689 | 0,867 | **0,768** | **0,748** |
-| 3 | 44% | 0,030 | 5.715 | 0,921 | 0,935 | 0,878 |
+| 1 | 22% | **−0,053** | **5.705** | 0,875 | 0,800 | 0,736 |
+| 2 | 34% | −0,020 | 5.725 | **0,806** | **0,684** | **0,668** |
+| 3 | 44% | 0,030 | 5.749 | 0,922 | 0,735 | 0,773 |
 
-L'RMSE è l'errore pseudo fuori campione sui 16 trimestri 2008-2011, a 90, 60 e 30 giorni dalla pubblicazione del PIL. Sulla stessa finestra l'AR(1) ha RMSE 0,958 e il bridge 1,035, 0,965 e 0,758.
+L'RMSE è calcolato sui 16 trimestri 2008-2011, a 90, 60 e 30 giorni dalla pubblicazione del PIL. Sulla stessa finestra l'AR(1) ha RMSE 0,958 e il bridge 0,981, 0,765 e 0,618.
 
-Il modello principale ha **un fattore con dinamica VAR(1)**: lo indicano entrambi i criteri di informazione, mentre in validazione uno e due fattori sono sostanzialmente pari e tre sono peggiori. Un secondo ritardo nella dinamica del fattore non migliora il BIC. Il modello a due fattori resta nel backtest come controllo di robustezza.
+Le evidenze non sono concordi: i due criteri di informazione indicano un fattore, gli errori sulla finestra di sviluppo ne preferiscono due. Il modello principale ha **un fattore con dinamica VAR(1)**, seguendo i criteri formali e la parsimonia; quello a due fattori entra nel backtest alla pari, come alternativa dichiarata in anticipo. Un secondo ritardo nella dinamica del fattore non migliora il BIC.
+
+Sulla stessa finestra è stata provata e scartata una regola automatica per gli outlier (distanza dalla mediana oltre 10 volte lo scarto interquartile): sui campioni corti del 2009 trattava la crisi come anomalia e produceva un errore di 3,4 punti su un trimestre.
 
 ### Valutazione
 
@@ -90,15 +109,16 @@ Da fare.
 
 ## Limiti
 
-- **Pseudo real-time, non real-time**: la tabella registra quando un dato è uscito, ma il valore è quello di oggi, già rivisto. Il backtest rispetta il calendario delle pubblicazioni e ignora le revisioni, quindi tende a sovrastimare l'accuratezza che si sarebbe ottenuta davvero.
-- **Date di rilascio in gran parte stimate**: per quasi tutte le serie lo storico usa un ritardo fisso, mentre il calendario reale varia di qualche giorno. Gli orizzonti del backtest vanno letti con questa tolleranza.
-- **Data del PIL**: 30 giorni dalla fine del trimestre, cioè la stima preliminare ISTAT. Le edizioni storiche dei conti trimestrali ISTAT, che permetterebbero di valutare contro la prima stima, non sono ancora integrate.
-- **Campione**: vendite al dettaglio dal 2000 e commercio estero dal 2002 limitano il campione comune a circa 98 trimestri.
-- **Intervalli dei modelli**: la deviazione standard del bridge e degli AR considera solo l'errore della regressione, non l'incertezza sui mesi completati né quella dei parametri. Gli intervalli della dashboard si baseranno sugli errori del backtest.
-- **Finestra Covid scelta a posteriori**: escludere marzo-settembre 2020 dalla stima è una decisione presa sapendo com'è andata; nel 2020 nessuno aveva questa informazione.
-- **Validazione corta**: i 16 trimestri usati per scegliere i fattori includono la crisi del 2008-2009 e non distinguono uno da due fattori.
-- **Aprile 2020**: le inchieste sulla fiducia non furono condotte; il mese è mancante.
-- **Fiducia dei consumatori**: l'8 ottobre 2026 il dato di settembre non era ancora disponibile, a differenza delle altre inchieste. Il ritardo zero assegnato alla serie potrebbe essere ottimistico.
+- **Pseudo real-time, non real-time.** Per lo storico precedente al primo download (8 ottobre 2026) i valori sono quelli già rivisti disponibili quel giorno: il backtest rispetta il calendario delle pubblicazioni ma non le revisioni. Parametri e standardizzazione usano quindi valori che allora non esistevano, e il verso della distorsione sull'accuratezza non è garantito. Da ottobre 2026 in poi le revisioni sono registrate.
+- **Date di rilascio in gran parte stimate.** Circa il 96% delle righe ha una data ricavata dal ritardo tipico. I ritardi sono riscontrati su alcune date reali, non su tutto il calendario: gli orizzonti del backtest hanno una tolleranza di qualche giorno.
+- **Date nazionali, fonte europea.** I riscontri riguardano i comunicati ISTAT, mentre i dati arrivano da Eurostat, che può pubblicarli più tardi.
+- **Fiducia dei consumatori.** L'8 ottobre 2026 il dato di settembre non era disponibile, a differenza delle altre inchieste: il ritardo zero potrebbe essere ottimistico e va verificato sul calendario della fonte.
+- **HICP.** Il ritardo di tre giorni corrisponde alla stima flash; il valore usato è quello successivo, rivisto.
+- **Edizioni storiche del PIL non integrate.** ISTAT pubblica le edizioni dei conti trimestrali dal 2014, con cui si potrebbe valutare contro la prima stima invece che contro il dato di oggi.
+- **Finestra di sviluppo non indipendente.** I 16 trimestri 2008-2011 sono serviti a scegliere la specificazione e includono la crisi del 2008-2009.
+- **Intervalli dei modelli.** La deviazione standard del bridge e degli AR considera solo l'errore della regressione, non l'incertezza sui mesi completati né quella dei parametri. Gli intervalli della dashboard si baseranno sugli errori del backtest.
+- **Campione.** Vendite al dettaglio dal 2000 e commercio estero dal 2002 limitano il campione comune a circa 98 trimestri.
+- **Aprile 2020.** Le inchieste sulla fiducia non furono condotte; il mese è mancante.
 
 ## Come eseguire
 

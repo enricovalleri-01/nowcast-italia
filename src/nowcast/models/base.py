@@ -13,10 +13,11 @@ from nowcast.transforms import apply_transform
 
 SAMPLE_START = pd.Timestamp("2000-01-01")
 
-# Periodo escluso dalla stima dei parametri (non dalle previsioni): crollo e rimbalzo
-# del 2020 sono ordini di grandezza fuori scala e dominerebbero ogni stima.
-COVID_START = pd.Timestamp("2020-03-01")
-COVID_END = pd.Timestamp("2020-09-30")
+Window = tuple[pd.Timestamp, pd.Timestamp]
+
+# Crollo e rimbalzo del 2020. Escluderli dalla stima è una scelta fatta col senno di poi:
+# i modelli principali non la applicano, serve solo alle varianti ex post.
+COVID_WINDOW: Window = (pd.Timestamp("2020-03-01"), pd.Timestamp("2020-09-30"))
 
 
 @dataclass(frozen=True)
@@ -76,13 +77,22 @@ def months_between(last: pd.Timestamp, target: pd.Timestamp) -> int:
     return int(target.to_period("M").ordinal - last.to_period("M").ordinal)
 
 
-def in_covid(index: pd.DatetimeIndex) -> pd.Series:
-    """True per i periodi che si sovrappongono alla finestra esclusa dalla stima."""
-    return pd.Series((index >= COVID_START) & (index <= COVID_END), index=index)
+def in_window(index: pd.Index, window: Window | None) -> pd.Series:
+    """True per i periodi che cadono nella finestra; tutto False se la finestra è None."""
+    dates = pd.DatetimeIndex(index)
+    if window is None:
+        return pd.Series(False, index=index)
+    return pd.Series((dates >= window[0]) & (dates <= window[1]), index=index)
 
 
-def mask_covid(data: pd.Series) -> pd.Series:
-    return data.mask(in_covid(pd.DatetimeIndex(data.index)))
+def mask_window(data: pd.Series, window: Window | None) -> pd.Series:
+    """Sostituisce con NaN i periodi della finestra: restano fuori dalla stima dei parametri."""
+    return data.mask(in_window(data.index, window))
+
+
+def variant_name(name: str, window: Window | None) -> str:
+    """Le varianti stimate con una finestra esclusa sono riconoscibili dal nome."""
+    return name if window is None else f"{name}_expost"
 
 
 def stationary_panel(info: InfoSet, transforms: dict[str, str] | None = None) -> pd.DataFrame:

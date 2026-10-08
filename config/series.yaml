@@ -2,8 +2,11 @@
 #
 # frequency         M (mensile) o Q (trimestrale); le serie sono salvate in livelli.
 # transform         applicata dopo lo snapshot: none | diff | pct_change | log_diff
-# release_lag_days  giorni tra la fine del periodo di riferimento e la pubblicazione.
-#                   È una stima del ritardo tipico, usata quando manca la data reale.
+# release_lag_days  giorni tra la fine del periodo di riferimento e la pubblicazione,
+#                   nel regime attuale. È una stima prudente (arrotondata per eccesso),
+#                   usata quando manca la data reale.
+# release_lag_history  (opzionale) regimi passati: `until` è l'ultimo periodo di
+#                   riferimento a cui si applicano quei giorni.
 # block             gruppo economico (per la dashboard)
 # dfm               (opzionale) trasformazione usata nel DFM se diversa da `transform`,
 #                   oppure `exclude` per le serie che sono combinazioni di altre.
@@ -18,7 +21,9 @@ series:
     filters: {geo: IT, unit: CLV20_MEUR, s_adj: SCA, na_item: B1GQ}
     frequency: Q
     transform: pct_change
-    release_lag_days: 30  # stima preliminare ISTAT a t+30; FRED la recepisce più tardi
+    release_lag_days: 32  # stima preliminare ISTAT a circa 30 giorni (es. 2 maggio 2018 per il 2018-Q1)
+    release_lag_history:
+      - {until: 2017-12-31, days: 46}  # fino al 2017-Q4 usciva a 45 giorni (es. 15 febbraio 2012)
     block: target
     role: target
 
@@ -29,7 +34,7 @@ series:
     filters: {geo: IT, s_adj: SCA, nace_r2: B-D, unit: I21}
     frequency: M
     transform: pct_change
-    release_lag_days: 41
+    release_lag_days: 43  # es. luglio 2011 uscito il 12 settembre
     block: real
 
   - id: retail
@@ -39,7 +44,10 @@ series:
     filters: {geo: IT, s_adj: SCA, nace_r2: G47, indic_bt: VOL_SLS, unit: I21}
     frequency: M
     transform: pct_change
-    release_lag_days: 37
+    release_lag_days: 38  # 38 giorni dalla base 2015 (marzo 2018)
+    release_lag_history:
+      - {until: 2016-12-31, days: 56}  # 55 giorni (es. luglio 2011 il 23 settembre)
+      - {until: 2017-12-31, days: 43}  # 40 giorni dal dato di gennaio 2017 (uscito il 15 marzo)
     block: real
 
   - id: exports
@@ -49,7 +57,7 @@ series:
     filters: {geo: IT, partner: WORLD, indic: ET-T, stk_flow: EXP, unit: MIO-EUR-SA}
     frequency: M
     transform: pct_change
-    release_lag_days: 47
+    release_lag_days: 50  # es. novembre 2011 uscito il 18 gennaio 2012
     block: real
 
   - id: imports
@@ -59,7 +67,7 @@ series:
     filters: {geo: IT, partner: WORLD, indic: ET-T, stk_flow: IMP, unit: MIO-EUR-SA}
     frequency: M
     transform: pct_change
-    release_lag_days: 47
+    release_lag_days: 50  # es. novembre 2011 uscito il 18 gennaio 2012
     block: real
 
   - id: unemployment
@@ -69,7 +77,7 @@ series:
     filters: {geo: IT, s_adj: SA, age: TOTAL, sex: T, unit: PC_ACT}
     frequency: M
     transform: diff
-    release_lag_days: 33
+    release_lag_days: 33  # es. dicembre 2011 uscito il 31 gennaio 2012
     block: labour
 
   - id: esi
@@ -153,7 +161,7 @@ series:
     minus: [yield_it_10y, yield_de_10y]
     frequency: M
     transform: diff
-    release_lag_days: 14  # ritardo della fonte; sul mercato il dato è noto a fine mese
+    release_lag_days: 14  # informativo: la serie è calcolata dalle componenti
     block: financial
 
   - id: euribor_3m

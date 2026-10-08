@@ -8,7 +8,15 @@ import numpy as np
 import pandas as pd
 
 from nowcast.models.ar import fit_ar, forecast_ar, select_order
-from nowcast.models.base import InfoSet, Nowcast, in_covid, mask_covid, months_between
+from nowcast.models.base import (
+    InfoSet,
+    Nowcast,
+    Window,
+    in_window,
+    mask_window,
+    months_between,
+    variant_name,
+)
 from nowcast.transforms import apply_transform, monthly_to_quarterly
 
 # Scelti a priori, non sul periodo di valutazione: due indicatori quantitativi con la
@@ -37,15 +45,20 @@ def rebuild_levels(last_level: float, changes: np.ndarray, kind: str) -> np.ndar
     raise ValueError(f"trasformazione sconosciuta: {kind}")
 
 
-def complete_months(levels: pd.Series, kind: str, target: pd.Timestamp) -> pd.Series:
+def complete_months(
+    levels: pd.Series,
+    kind: str,
+    target: pd.Timestamp,
+    exclude: Window | None = None,
+) -> pd.Series:
     """Estende la serie in livelli fino alla fine del trimestre obiettivo con un AR."""
     observed = pd.Series(levels.loc[: levels.last_valid_index()].interpolate(limit_area="inside"))
     steps = months_between(observed.index[-1], target)
     if steps <= 0:
         return pd.Series(observed)
     stationary = apply_transform(observed, kind)
-    estimation = mask_covid(stationary)
-    fit = fit_ar(estimation, select_order(estimation.dropna(), MAX_AR_ORDER))
+    estimation = mask_window(stationary, exclude)
+    fit = fit_ar(estimation, select_order(estimation, MAX_AR_ORDER))
     changes, _ = forecast_ar(stationary.to_numpy(), fit, steps)
     future = pd.date_range(observed.index[-1], periods=steps + 1, freq="ME")[1:]
     extension = pd.Series(rebuild_levels(float(observed.iloc[-1]), changes, kind), index=future)
@@ -66,23 +79,27 @@ def ols(y: pd.Series, x: pd.DataFrame) -> tuple[pd.Series, float]:
 
 
 class Bridge:
-    name = "bridge"
-
-    def __init__(self, indicators: tuple[str, ...] = DEFAULT_INDICATORS) -> None:
+    def __init__(
+        self,
+        indicators: tuple[str, ...] = DEFAULT_INDICATORS,
+        exclude: Window | None = None,
+    ) -> None:
         self.indicators = indicators
+        self.exclude = exclude
+        self.name = variant_name("bridge", exclude)
 
     def regressors(self, info: InfoSet, target: pd.Timestamp) -> pd.DataFrame:
         columns = {}
         for name in self.indicators:
             kind = info.transforms[name]
-            completed = complete_months(info.monthly_levels[name], kind, target)
+            completed = complete_months(info.monthly_levels[name], kind, target, self.exclude)
             columns[name] = quarterly_regressor(completed, kind)
         return pd.DataFrame(columns)
 
     def fit(self, info: InfoSet, target: pd.Timestamp) -> BridgeFit:
         regressors = self.regressors(info, target)
         sample = regressors.join(info.gdp_growth, how="inner").dropna()
-        sample = sample[~in_covid(pd.DatetimeIndex(sample.index)).to_numpy()]
+        sample = sample[~in_window(sample.index, self.exclude).to_numpy()]
         coefs, sigma = ols(sample["gdp"], sample[list(self.indicators)])
         return BridgeFit(coefs, sigma, regressors)
 
