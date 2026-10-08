@@ -2,7 +2,7 @@
 
 Stima in tempo reale della crescita trimestrale del PIL dell'Italia a partire da indicatori mensili, con valutazione pseudo real-time dei modelli.
 
-**Stato del progetto**: dati e modelli completati (Fasi 1 e 2). Valutazione e dashboard sono in arrivo; le sezioni corrispondenti sono segnate come da fare.
+**Stato del progetto**: dati e modelli completati (Fasi 1 e 2), protocollo di valutazione fissato. Backtest e dashboard sono in arrivo; i risultati sono segnati come da fare.
 
 ## Domanda di ricerca
 
@@ -99,13 +99,68 @@ Le evidenze non sono concordi: i due criteri di informazione indicano un fattore
 
 Sulla stessa finestra è stata provata e scartata una regola automatica per gli outlier (distanza dalla mediana oltre 10 volte lo scarto interquartile): sui campioni corti del 2009 trattava la crisi come anomalia e produceva un errore di 3,4 punti su un trimestre.
 
-### Valutazione
+## Protocollo di valutazione
 
-Da fare (Fase 3): backtest a 90, 60 e 30 giorni dalla pubblicazione del PIL, RMSE, MAE, test di Diebold-Mariano, risultati con e senza il 2020-2021.
+Versione 1, fissata con il tag git `protocollo-v1` prima di eseguire il backtest. Da quel commit la specificazione dei modelli e le regole qui sotto non cambiano in base ai risultati. Ogni cambiamento successivo va elencato in "Modifiche successive al protocollo", con data, motivo e l'indicazione se è stato deciso dopo aver visto i risultati.
+
+### Oggetto
+
+- **Variabile**: crescita t/t del PIL italiano in volume, destagionalizzato e corretto per il calendario.
+- **Valore realizzato**: quello presente nel dataset congelato, cioè l'ultima versione disponibile e non la prima stima pubblicata.
+- **Dataset**: quello scaricato l'8 ottobre 2026, impronta `56a8dddb28d8`. Il backtest non aggiorna i dati.
+
+### Modelli
+
+La specificazione è quella del codice e di `config/series.yaml` al commit del tag.
+
+| Ruolo | Modelli |
+|---|---|
+| Benchmark principale | `ar1` |
+| Altri benchmark | `media_storica`, `ar2` |
+| Modelli valutati | `bridge`, `dfm_k1` (principale), `dfm_k2` (alternativa dichiarata) |
+| Analisi secondaria | le varianti `_expost` di tutti i modelli, stimate senza marzo-settembre 2020 |
+
+### Disegno del backtest
+
+- **Trimestri**: dal 2012-Q1 al 2026-Q2, 58 trimestri. I dati fino al 2011 sono serviti a sviluppare i modelli e restano fuori.
+- **Orizzonti**: 90, 60 e 30 giorni prima della data di pubblicazione del PIL del trimestre, letta dalla tabella delle osservazioni. Poiché la stima preliminare usciva a 45 giorni fino al 2017 e a 30 dopo, lo stesso orizzonte cade in un punto diverso del trimestre nei due periodi: a 30 giorni dalla pubblicazione si è 16 giorni dopo la fine del trimestre fino al 2017, 2 giorni dopo dal 2018.
+- **Set informativo**: `snapshot` alla data dell'orizzonte, senza eccezioni.
+- **Stima**: finestra espandente dal 2000, parametri ristimati a ogni data. Nessun riuso di parametri tra date.
+- **Fallimenti**: se un modello rifiuta la stima (EM non convergente, modello non stazionario) la previsione resta mancante, con il motivo registrato. Non viene sostituita. Il numero di fallimenti è riportato per modello e orizzonte.
+
+### Metriche
+
+Errore = previsione − valore realizzato. Per ogni modello e orizzonte: RMSE, MAE, errore medio e RMSE relativo a quello di `ar1`. I confronti tra modelli usano solo i trimestri in cui tutti i modelli confrontati hanno una previsione.
+
+### Finestre
+
+| Finestra | Trimestri | Uso |
+|---|---|---|
+| Completa | 2012-Q1 – 2026-Q2 (58) | risultato principale |
+| Senza 2020-2021 | 50 | risultato principale |
+| 2012-2019, 2020-2021, 2022-2026 | 32, 8, 18 | analisi di dove i modelli falliscono |
+
+Le due finestre principali hanno pari peso: nella prima l'RMSE è dominato dal 2020, nella seconda misura i periodi ordinari.
+
+### Test statistici
+
+- **Test**: Diebold-Mariano con la correzione per piccoli campioni di Harvey, Leybourne e Newbold, a due code, distribuzione t con n − 1 gradi di libertà.
+- **Perdita**: errore quadratico (principale) ed errore assoluto (secondaria).
+- **Varianza di lungo periodo**: nucleo rettangolare troncato a h − 1, dove h è il numero massimo di trimestri tra l'ultimo PIL noto e il trimestre previsto. Sul dataset congelato h vale 1 a 60 e 30 giorni e 2 a 90 giorni (un solo caso).
+- **Confronti confermativi**: `bridge` contro `ar1` e `dfm_k1` contro `ar1`, ai tre orizzonti e sulle due finestre principali: 12 test. Tutti gli altri confronti sono esplorativi.
+- **Avvertenze**: nessuna correzione per confronti multipli; con 50-58 osservazioni la potenza è bassa; con stima a finestra espandente il test va letto come confronto tra metodi di previsione, non tra modelli veri.
+
+### Cosa viene salvato
+
+Una riga per modello, trimestre e orizzonte con: previsione e deviazione standard, valore realizzato, data dell'orizzonte (`as_of`), data di pubblicazione del PIL, impronta del dataset, commit del codice ed esito (con il motivo in caso di fallimento).
+
+### Modifiche successive al protocollo
+
+Nessuna.
 
 ## Risultati
 
-Da fare.
+Da fare: il backtest non è ancora stato eseguito.
 
 ## Limiti
 
