@@ -114,6 +114,16 @@ Le evidenze non sono concordi: i due criteri di informazione indicano un fattore
 
 Sulla stessa finestra è stata provata e scartata una regola automatica per gli outlier (distanza dalla mediana oltre 10 volte lo scarto interquartile): sui campioni corti del 2009 trattava la crisi come anomalia e produceva un errore di 3,4 punti su un trimestre.
 
+### Stima corrente e intervalli
+
+Il comando `nowcast` stima il primo trimestre non ancora pubblicato con tutti i modelli del protocollo e aggiunge le stime a un registro a sole aggiunte (`data/nowcast_log.csv`), con data, impronta del dataset e commit del codice.
+
+Gli intervalli non vengono dalle deviazioni standard dei modelli, che ignorano l'incertezza sui parametri e sui mesi completati. Sono i quantili empirici degli errori che lo stesso modello ha commesso nel backtest allo stesso orizzonte: l'intervallo all'80% va dalla previsione meno il 90° percentile dell'errore alla previsione meno il 10°, quello al 50% usa il 75° e il 25°. Se un modello in media sovrastima, l'intervallo si sposta di conseguenza.
+
+- **Gli errori del 2020-2021 sono esclusi.** Gli intervalli descrivono periodi ordinari e non coprono uno shock di quella portata. Ogni cella usa 50 errori.
+- **Orizzonte applicato.** Dai giorni che mancano alla pubblicazione attesa del PIL si prende l'orizzonte del backtest più vicino che non sia più corto: con 24 giorni si usa quello a 30, con 45 quello a 60. Oltre i 90 giorni si usa comunque 90.
+- **Livelli al 50% e all'80%.** Con 50 errori un intervallo al 95% dipenderebbe da due o tre osservazioni.
+
 ## Protocollo di valutazione
 
 Versione 1, fissata con il tag git `protocollo-v1` prima di eseguire il backtest. Da quel commit la specificazione dei modelli e le regole qui sotto non cambiano in base ai risultati. Ogni cambiamento successivo va elencato in "Modifiche successive al protocollo", con data, motivo e l'indicazione se è stato deciso dopo aver visto i risultati.
@@ -302,7 +312,7 @@ pip install -e ".[dev]"
 cp .env.example .env        # poi inserire la chiave FRED (gratuita)
 python -m nowcast.pipeline init-data        # prima volta: importa lo storico
 python -m nowcast.pipeline update-data      # aggiornamenti successivi
-python -m nowcast.pipeline nowcast          # stima del trimestre in corso
+python -m nowcast.pipeline nowcast          # stima del trimestre in corso, con intervalli
 python -m nowcast.pipeline select-factors   # evidenze sulla scelta dei fattori
 python -m nowcast.pipeline backtest         # backtest del protocollo (circa 5 minuti)
 python -m nowcast.pipeline evaluate         # tabelle dei risultati

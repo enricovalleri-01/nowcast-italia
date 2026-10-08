@@ -13,25 +13,31 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 from collections.abc import Callable
 
 import pandas as pd
 from dotenv import load_dotenv
 
-from nowcast.config import ROOT, SeriesSpec, load_series
+from nowcast.config import DATA_DIR, ROOT, SeriesSpec, load_series
 from nowcast.data import cache
 from nowcast.data.sources import ecb, eurostat, fred
 from nowcast.data.vintages import import_history, redate, update
 from nowcast.evaluation import backtest
 from nowcast.evaluation.report import build_report
+from nowcast.live.intervals import EXCLUSION_NOTE
+from nowcast.live.nowcast import append_to_log, current_nowcasts
 from nowcast.models import selection
-from nowcast.models.base import Model, Nowcast, build_info, next_unpublished_quarter
-from nowcast.models.benchmark import ARBenchmark, HistoricalMean
-from nowcast.models.bridge import Bridge
-from nowcast.models.dfm import DFM
 from nowcast.transforms import daily_to_monthly
 
 log = logging.getLogger("nowcast")
+
+
+RESULTS_DIR = ROOT / "results"
+BACKTEST_PATH = RESULTS_DIR / "backtest.csv"
+REPORT_PATH = RESULTS_DIR / "report.md"
+DATE_COLUMNS = ["target", "as_of", "publication_date"]
+NOWCAST_LOG_PATH = DATA_DIR / "nowcast_log.csv"
 
 
 def last_complete_month(today: pd.Timestamp) -> pd.Timestamp:
@@ -118,24 +124,50 @@ def redate_data() -> pd.DataFrame:
     return _save(tables, "correzione del calendario")
 
 
-def default_models() -> list[Model]:
-    return [HistoricalMean(), ARBenchmark(1), ARBenchmark(2), Bridge(), DFM(1), DFM(2)]
+def code_commit() -> str:
+    """Commit del codice in esecuzione, con un segno se ci sono modifiche non committate."""
+    head = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    dirty = (
+        subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ROOT, check=False).returncode != 0
+    )
+    return f"{head}-modificato" if dirty else head
 
 
-def run_nowcast(as_of: pd.Timestamp | None = None) -> list[Nowcast]:
-    """Nowcast di tutti i modelli per il primo trimestre non ancora pubblicato."""
+def run_nowcast(as_of: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Stima corrente di tutti i modelli del protocollo, aggiunta al registro."""
     as_of = (as_of or pd.Timestamp.today()).normalize()
     observations = cache.load_observations()
-    info = build_info(observations, load_series(), as_of)
-    target = next_unpublished_quarter(info)
-    log.info("dataset %s", cache.dataset_version(observations))
-    results = [model.nowcast(info, target) for model in default_models()]
-    log.info(
-        "Nowcast del PIL t/t, trimestre che termina il %s (dati al %s)", target.date(), as_of.date()
+    rows = current_nowcasts(
+        observations,
+        load_series(),
+        backtest.protocol_models(),
+        load_backtest(),
+        as_of,
+        cache.dataset_version(observations),
+        code_commit(),
     )
-    for r in results:
-        log.info("%-14s %+.2f%%  (dev. std. %.2f)", r.model, r.mean, r.std)
-    return results
+    append_to_log(rows, NOWCAST_LOG_PATH)
+    first = rows.iloc[0]
+    log.info(
+        "PIL t/t del trimestre che termina il %s, dati al %s (dataset %s)",
+        first["target"].date(), as_of.date(), first["dataset_version"],
+    )  # fmt: skip
+    log.info(
+        "pubblicazione attesa tra %d giorni: intervalli dall'orizzonte a %d giorni. %s",
+        first["days_to_publication"], first["horizon_applied"], EXCLUSION_NOTE,
+    )  # fmt: skip
+    for row in rows.itertuples():
+        log.info(
+            "%-22s %+.2f%%   80%%: [%+.2f, %+.2f]   50%%: [%+.2f, %+.2f]",
+            row.model, row.forecast, row.low80, row.high80, row.low50, row.high50,
+        )  # fmt: skip
+    return rows
 
 
 def run_factor_selection() -> None:
@@ -151,12 +183,6 @@ def run_factor_selection() -> None:
         "RMSE sulla finestra di sviluppo 2008-2011, per giorni alla pubblicazione\n%s",
         rmse.round(3),
     )
-
-
-RESULTS_DIR = ROOT / "results"
-BACKTEST_PATH = RESULTS_DIR / "backtest.csv"
-REPORT_PATH = RESULTS_DIR / "report.md"
-DATE_COLUMNS = ["target", "as_of", "publication_date"]
 
 
 def run_backtest(workers: int = 6) -> pd.DataFrame:
