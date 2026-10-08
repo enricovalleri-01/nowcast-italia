@@ -82,8 +82,9 @@ def current_nowcasts(
     return pd.DataFrame(rows).reindex(columns=LOG_COLUMNS)
 
 
-def read_log(path: Path) -> pd.DataFrame:
-    if not path.exists():
+def read_log(path: Path | str) -> pd.DataFrame:
+    """Legge il registro da un file locale o da un indirizzo web (il branch `data`)."""
+    if isinstance(path, Path) and not path.exists():
         return pd.DataFrame(columns=LOG_COLUMNS)
     return pd.read_csv(
         path,

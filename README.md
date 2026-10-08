@@ -2,7 +2,7 @@
 
 Stima in tempo reale della crescita trimestrale del PIL dell'Italia a partire da indicatori mensili, con valutazione pseudo real-time dei modelli.
 
-**Stato del progetto**: dati, modelli, valutazione e dashboard completati. L'aggiornamento automatico settimanale è in arrivo.
+**Stato del progetto**: dati, modelli, valutazione, dashboard e aggiornamento automatico settimanale completati.
 
 ## Domanda di ricerca
 
@@ -134,6 +134,24 @@ Gli intervalli non vengono dalle deviazioni standard dei modelli, che ignorano l
 | Storico | previsioni del backtest contro il dato realizzato per modello e orizzonte, errori per trimestre, stime registrate dal vivo |
 | Confronto tra modelli | accuratezza, test di Diebold-Mariano e sottoperiodi, per le due finestre del protocollo |
 | Metodo e limiti | conclusioni e limiti, ripresi da questo README |
+
+### Aggiornamento automatico
+
+Un workflow di GitHub Actions ([.github/workflows/update.yml](.github/workflows/update.yml)) gira ogni lunedì: esegue i test, aggiorna i dati, verifica l'archivio, ricalcola le stime e salva tutto.
+
+- **Il codice sta su `main`, i dati sul branch `data`.** Il workflow legge `main` senza credenziali di scrittura e scrive solo su `data`, che contiene l'archivio, una copia di ogni versione e il registro delle stime, mai codice.
+- **Solo aggiunte.** Il workflow usa `update-data`, mai `init-data` o `redate-data`. Prima di salvare confronta l'archivio con quello precedente e si ferma se una riga esistente è cambiata o sparita; si ferma anche se un file dell'archivio risulta rimosso.
+- **Non crea mai l'archivio.** Se il branch `data` non contiene l'archivio il workflow fallisce. Il primo caricamento si fa una volta sola, a mano, con `scripts/init_data_branch.sh`.
+- **La chiave FRED è un secret del repository** (`FRED_API_KEY`); non compare in nessun file.
+
+Due script accompagnano il workflow:
+
+| Script | Cosa fa |
+|---|---|
+| `scripts/backup_data.sh` | copia archivio, versioni e registro delle stime in una cartella fuori dal repository e verifica la copia |
+| `scripts/security_scan.sh` | cerca in tutta la storia git file `.env`, chiavi, percorsi personali e indirizzi email diversi da quello ammesso |
+
+La dashboard pubblicata legge il registro delle stime dal branch `data` se è impostata la variabile `NOWCAST_LOG_URL`; altrimenti usa il file locale.
 
 ## Protocollo di valutazione
 

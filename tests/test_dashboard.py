@@ -16,6 +16,7 @@ from nowcast.dashboard.data import (
     readme_section,
     without_covid_years,
 )
+from nowcast.pipeline import NOWCAST_LOG_PATH
 
 APP = str(ROOT / "app" / "streamlit_app.py")
 
@@ -121,6 +122,8 @@ def test_every_page_renders_without_errors(page: str) -> None:
 
 
 def test_current_page_shows_the_benchmark_warning_and_the_applied_horizon() -> None:
+    if not NOWCAST_LOG_PATH.exists():
+        pytest.skip("nessun registro delle stime in locale")
     app = AppTest.from_function(render, kwargs={"page": "page_current"}, default_timeout=60).run()
     assert [w.value for w in app.warning] == [BENCHMARK_WARNING]
     assert app.metric[0].label == "AR(1), benchmark"

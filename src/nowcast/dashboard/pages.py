@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -44,9 +46,12 @@ def backtest_results(modified: float) -> pd.DataFrame:
     return load_backtest()
 
 
-@st.cache_data
-def nowcast_log(modified: float) -> pd.DataFrame:
-    return read_log(NOWCAST_LOG_PATH)
+LOG_URL_VARIABLE = "NOWCAST_LOG_URL"  # indirizzo del registro sul branch `data`, se pubblicata
+
+
+@st.cache_data(ttl=3600)
+def nowcast_log(source: str, modified: float) -> pd.DataFrame:
+    return read_log(source if source.startswith("http") else Path(source))
 
 
 def results() -> pd.DataFrame:
@@ -54,8 +59,12 @@ def results() -> pd.DataFrame:
 
 
 def estimates() -> pd.DataFrame:
+    """Registro delle stime: dal branch `data` se è configurato l'indirizzo, altrimenti locale."""
+    url = os.environ.get(LOG_URL_VARIABLE, "")
+    if url:
+        return nowcast_log(url, 0.0)
     modified = NOWCAST_LOG_PATH.stat().st_mtime if NOWCAST_LOG_PATH.exists() else 0.0
-    return nowcast_log(modified)
+    return nowcast_log(str(NOWCAST_LOG_PATH), modified)
 
 
 def estimate_table(rows: pd.DataFrame) -> None:

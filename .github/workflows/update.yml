@@ -1,0 +1,81 @@
+# Aggiornamento settimanale dei dati e delle stime.
+#
+# Il codice viene letto da `main` in sola lettura; l'archivio vive sul branch `data`, l'unico
+# su cui questo workflow scrive. L'archivio cresce solo per aggiunta: si usa `update-data`,
+# mai `init-data` o `redate-data`, e prima di salvare si verifica che nessuna riga esistente
+# sia cambiata.
+name: Aggiornamento dati e stime
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # ogni lunedì alle 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write # serve solo per il push sul branch `data`
+
+concurrency:
+  group: aggiornamento-dati
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Codice (main, sola lettura)
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Archivio (branch data)
+        uses: actions/checkout@v7
+        with:
+          ref: data
+          path: _data
+
+      - name: Collega l'archivio alla cartella data/
+        run: |
+          test -f _data/data/observations.parquet || { echo "Archivio assente sul branch data: va creato a mano, mai dal workflow."; exit 1; }
+          ln -s "$PWD/_data/data" data
+          cp _data/data/observations.parquet "$RUNNER_TEMP/observations_before.parquet"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Dipendenze
+        run: pip install -e ".[dev]"
+
+      - name: Test
+        run: pytest -q
+
+      - name: Aggiorna i dati (solo aggiunte)
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python -m nowcast.pipeline update-data
+
+      - name: Verifica che l'archivio sia solo cresciuto
+        run: python -m nowcast.ops.archive_check "$RUNNER_TEMP/observations_before.parquet" data/observations.parquet
+
+      - name: Stime
+        run: python -m nowcast.pipeline nowcast
+
+      - name: Salva sul branch data
+        working-directory: _data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "Nessuna novità da salvare."
+            exit 0
+          fi
+          if git diff --cached --name-status | grep -E '^[DR]' ; then
+            echo "Un file dell'archivio risulta rimosso o rinominato: salvataggio annullato."
+            exit 1
+          fi
+          git commit -m "Aggiornamento dati e stime del $(date -u +%Y-%m-%d)"
+          git push origin HEAD:data
