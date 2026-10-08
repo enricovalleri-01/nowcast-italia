@@ -2,7 +2,7 @@
 
 Stima in tempo reale della crescita trimestrale del PIL dell'Italia a partire da indicatori mensili, con valutazione pseudo real-time dei modelli.
 
-**Stato del progetto**: dati, modelli e valutazione completati (Fasi 1-3). La dashboard è in arrivo.
+**Stato del progetto**: dati, modelli, valutazione e dashboard completati. L'aggiornamento automatico settimanale è in arrivo.
 
 ## Domanda di ricerca
 
@@ -123,6 +123,17 @@ Gli intervalli non vengono dalle deviazioni standard dei modelli, che ignorano l
 - **Gli errori del 2020-2021 sono esclusi.** Gli intervalli descrivono periodi ordinari e non coprono uno shock di quella portata. Ogni cella usa 50 errori.
 - **Orizzonte applicato.** Dai giorni che mancano alla pubblicazione attesa del PIL si prende l'orizzonte del backtest più vicino che non sia più corto: con 24 giorni si usa quello a 30, con 45 quello a 60. Oltre i 90 giorni si usa comunque 90.
 - **Livelli al 50% e all'80%.** Con 50 errori un intervallo al 95% dipenderebbe da due o tre osservazioni.
+
+### Dashboard
+
+`streamlit run app/streamlit_app.py` apre quattro pagine. La dashboard non stima nulla: legge il registro delle stime e i risultati del backtest, quindi ogni numero è riconducibile a un'impronta del dataset e a un commit.
+
+| Pagina | Contenuto |
+|---|---|
+| Stima corrente | AR(1) in evidenza come benchmark, gli altri modelli accanto, con intervalli al 50% e all'80%; l'avviso che nel backtest nessun modello ha battuto il benchmark nei periodi ordinari; l'orizzonte applicato oggi |
+| Storico | previsioni del backtest contro il dato realizzato per modello e orizzonte, errori per trimestre, stime registrate dal vivo |
+| Confronto tra modelli | accuratezza, test di Diebold-Mariano e sottoperiodi, per le due finestre del protocollo |
+| Metodo e limiti | conclusioni e limiti, ripresi da questo README |
 
 ## Protocollo di valutazione
 
@@ -316,6 +327,7 @@ python -m nowcast.pipeline nowcast          # stima del trimestre in corso, con 
 python -m nowcast.pipeline select-factors   # evidenze sulla scelta dei fattori
 python -m nowcast.pipeline backtest         # backtest del protocollo (circa 5 minuti)
 python -m nowcast.pipeline evaluate         # tabelle dei risultati
+streamlit run app/streamlit_app.py          # dashboard
 pytest
 ```
 

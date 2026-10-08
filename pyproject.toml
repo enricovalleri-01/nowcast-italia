@@ -16,6 +16,7 @@ dependencies = [
     "requests>=2.31",
     "scipy>=1.11",
     "statsmodels>=0.14",
+    "streamlit>=1.40",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# I warning sono errori; l'unica eccezione viene dal test harness di Streamlit.
+filterwarnings = ["error", "ignore::ResourceWarning", "ignore::pytest.PytestUnraisableExceptionWarning"]
 
 [tool.ruff]
 line-length = 100
